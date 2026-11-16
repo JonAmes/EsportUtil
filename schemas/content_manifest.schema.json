@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ContentManifest",
+  "description": "Server-side Content Library served to agents over LAN HTTP (GET /content/{content_id}). Operator-managed files (desktop wallpapers, offline install payloads, config assets) addressed by stable content_id and verified by sha256. Agents cache under ProgramData\\EsportsUtil\\content\\ and skip re-download when the cached hash matches — pulls are idempotent. Factory State entries reference content by content_id so baseline restores are self-contained on any PC.",
+  "type": "object",
+  "required": ["version", "updated_timestamp", "items"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "updated_timestamp": { "type": "string", "format": "date-time" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["content_id", "filename", "sha256", "category"],
+        "properties": {
+          "content_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$", "description": "Stable handle; factory entries and jobs reference content only by this id, never by URL or path." },
+          "filename": { "type": "string", "description": "Suggested local filename when cached/applied." },
+          "category": { "enum": ["wallpaper", "installer", "config", "other"] },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "Integrity check; agent verifies after download, cache key is this hash." },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "target": { "enum": ["all", "model", "client"], "default": "all", "description": "Scoping of who receives/should have this content." },
+          "target_values": { "type": "array", "items": { "type": "string" }, "description": "machine_model or client_id list when target != all." },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

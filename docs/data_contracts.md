@@ -80,3 +80,13 @@ any installed app (from the full inventory inside `machine_state`) not matched b
 jobs), or `auto_remove` (unattended, explicit opt-in). The `protected` list vetoes
 removal unconditionally (drivers, Windows components, security products, the agent
 itself). It is a separate file/contract; the Master Manifest stays two-part.
+
+## 🗂️ 4. Content Library & Manifest (Server → agents)
+
+Schema: `schemas/content_manifest.schema.json`. Operator-managed files addressed by
+stable `content_id`, served at `GET /content/{content_id}`, verified by `sha256`, and
+cached per-agent under `ProgramData\EsportsUtil\content\` (cache key = hash; match =
+no re-download). Factory State entries reference needed files via optional
+`content_refs` (category + `content_id`) so Apply restores — wallpaper especially —
+work on machines that never had the file. `content_id` is the only handle used in
+factories, jobs, and dashboards; URLs and local paths never cross the wire.

@@ -28,14 +28,17 @@ esportsutil.exe
 │   ├── REST API               ingest manifest, PIN onboarding, heartbeat, pull
 │   │                          Factory State Map, rename, print-label, jobs
 │   ├── Dashboard              E-Sports Dashboard (served HTML)
-│   ├── Stores                 MasterManifest.json, device registry
+│   ├── Stores                 MasterManifest.json, device registry, ContentManifest.json
+│   │                          + content/ file store (GET /content/{id}, sha256)
 │   └── Alerts                 in-process queue + notification hosted service
 │   └── Software policy        Approved Software Policy evaluation (allow-list match,
 │                              protected veto) + operator approval / auto_remove job queue
 └── Agent role                 BackgroundService loop (each game PC)
     ├── register / PIN, heartbeat, report (wraps State Module + GameScanner)
-    ├── pull + apply baseline
-    ├── job runner             (Phase 4: apply / init / steamcmd / remove_software)
+    ├── pull + apply baseline  (fetches baseline content_refs into local cache first)
+    ├── content cache          ProgramData\EsportsUtil\content\, sha256-keyed, idempotent
+    ├── job runner             (Phase 4: apply / init / steamcmd / remove_software /
+    │                          deploy_content)
     └── UI surfaces            localhost HTML listener (:4310) + same-EXE --tray stub
                                (WinForms NotifyIcon, user session) — Edge renders both
                                dashboards; no Electron/WebView2 unless later required
@@ -53,6 +56,8 @@ shell over the Agent role; the service reports even when the window is closed.
 | Full installed-software inventory (Uninstall keys) | Core.StateModule | agent loop, server |
 | Approved-software policy evaluation + protected veto | Server role (policy is data, not agent logic) | agent, dashboard |
 | Software removal execution (quiet uninstall / winget) | Core.StateModule (job handler) | server, dashboard |
+| Content Library storage + /content endpoint | Server role | agent (agent only caches) |
+| Content fetch/cache/verify (sha256) + deploy_content handler | Core.StateModule / agent job runner | server decision logic |
 | Software install (winget, Init only) | Core.StateModule | server |
 | Baseline model-matching | Core.StateModule selection, driven by server data | dashboard |
 | game_id discovery (folder scan) | Core.GameScanner | StateModule |

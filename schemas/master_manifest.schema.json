@@ -49,6 +49,19 @@
             "type": "object",
             "description": "Opaque passthrough of the golden PC's State Module Record JSON (C# agent). Apply feeds this straight to the agent's Apply primitive; no field translation exists.",
             "additionalProperties": true
+          },
+          "content_refs": {
+            "type": "array",
+            "description": "Content Library files this baseline depends on (e.g. the wallpaper file). Apply fetches these via GET /content/{content_id} before restoring; the wallpaper setting then points at the agent's cached copy. Makes restores self-contained on any PC.",
+            "items": {
+              "type": "object",
+              "required": ["category", "content_id"],
+              "properties": {
+                "category": { "type": "string" },
+                "content_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$" }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false
