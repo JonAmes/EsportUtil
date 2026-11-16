@@ -35,7 +35,10 @@ esportsutil.exe
 └── Agent role                 BackgroundService loop (each game PC)
     ├── register / PIN, heartbeat, report (wraps State Module + GameScanner)
     ├── pull + apply baseline
-    └── job runner             (Phase 4: apply / init / steamcmd / remove_software)
+    ├── job runner             (Phase 4: apply / init / steamcmd / remove_software)
+    └── UI surfaces            localhost HTML listener (:4310) + same-EXE --tray stub
+                               (WinForms NotifyIcon, user session) — Edge renders both
+                               dashboards; no Electron/WebView2 unless later required
 ```
 
 The agent UI (operator window + tray flyout, `mockups/client_app.html`) is a thin
