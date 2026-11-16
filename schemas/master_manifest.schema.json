@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MasterManifest",
+  "description": "Server source of truth. factory_state entries embed the golden PC's MachineState.ps1 Record JSON VERBATIM plus factory metadata; no restated machine fields.",
+  "type": "object",
+  "required": ["master_list", "factory_state_map"],
+  "properties": {
+    "version": { "type": "integer" },
+    "updated_timestamp": { "type": "string", "format": "date-time" },
+    "master_list": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["game_id", "latest_version"],
+        "properties": {
+          "game_id": { "type": "string" },
+          "latest_version": { "type": "string" },
+          "minimum_version": { "type": "string" },
+          "launcher": { "enum": ["steam", "epic", "gog", "battlenet", "other"] },
+          "app_id": { "type": ["string", "null"], "description": "launcher-native id (Steam appid etc.) used by Phase 4 patch jobs" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "factory_state_map": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entry_id", "machine_model", "captured_timestamp", "game_baselines", "machine_state"],
+        "properties": {
+          "entry_id": { "type": "string" },
+          "source_client_id": { "type": ["string", "null"], "description": "golden PC this was recorded from, if a specific one" },
+          "machine_model": { "type": "string", "description": "Win32_ComputerSystem.Model string; client model-match uses this" },
+          "captured_timestamp": { "type": "string", "format": "date-time", "description": "newest capture wins on model ties, mirroring engine selection order" },
+          "game_baselines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["game_id", "version"],
+              "properties": {
+                "game_id": { "type": "string" },
+                "version": { "type": "string" },
+                "install_path": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "machine_state": {
+            "type": "object",
+            "description": "Opaque passthrough of the golden PC's State Module Record JSON (C# agent). Apply feeds this straight to the agent's Apply primitive; no field translation exists.",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

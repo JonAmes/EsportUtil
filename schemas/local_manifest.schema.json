@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LocalManifest",
+  "description": "Client Agent report (C# agent EXE). machine_state is embedded VERBATIM from the agent's State Module Record (ported MachineState.ps1 semantics; no PowerShell deployed); do not remap or restate its fields anywhere else in this document.",
+  "type": "object",
+  "required": ["client_id", "device_pin", "report_timestamp", "machine_state", "game_reports"],
+  "properties": {
+    "client_id": { "type": "string" },
+    "device_pin": { "type": "string", "pattern": "^[0-9]{4}$" },
+    "display_name": { "type": ["string", "null"], "description": "server-assigned; client echoes it, never invents it" },
+    "report_timestamp": { "type": "string", "format": "date-time" },
+    "agent_version": { "type": "string" },
+    "machine_state": {
+      "type": "object",
+      "description": "Opaque passthrough of the engine's Record JSON (computerName, machineManufacturer, machineModel, displays, startup items, StartupApproved state, screensaver, wallpaper, known-app inventory). Single owner: MachineState.ps1.",
+      "additionalProperties": true
+    },
+    "game_reports": {
+      "type": "array",
+      "description": "Net-new section: folder-scan discovery, the only capture logic outside the engine.",
+      "items": {
+        "type": "object",
+        "required": ["game_id", "folder_name_used", "current_version", "status"],
+        "properties": {
+          "game_id": { "type": "string" },
+          "folder_name_used": { "type": "string" },
+          "install_path": { "type": "string" },
+          "current_version": { "type": "string" },
+          "launcher": { "enum": ["steam", "epic", "gog", "battlenet", "other"] },
+          "status": {
+            "enum": ["OK", "UPDATE_REQUIRED", "ROLLBACK_REQUIRED", "DUPLICATE_FOUND", "FACTORY_MISMATCH"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "duplicates": {
+      "type": "array",
+      "description": "Same game_id found under multiple folders; resolution is the server's decision, never the client's.",
+      "items": {
+        "type": "object",
+        "required": ["game_id", "paths"],
+        "properties": {
+          "game_id": { "type": "string" },
+          "paths": { "type": "array", "items": { "type": "string" }, "minItems": 2 }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}
