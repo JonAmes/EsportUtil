@@ -90,3 +90,13 @@ no re-download). Factory State entries reference needed files via optional
 `content_refs` (category + `content_id`) so Apply restores — wallpaper especially —
 work on machines that never had the file. `content_id` is the only handle used in
 factories, jobs, and dashboards; URLs and local paths never cross the wire.
+
+## 🖥️ 5. Device Registry (Server-side per-machine control)
+
+Schema: `schemas/device_registry.schema.json`. One entry per registered client:
+immutable identity (`device_pin`, `client_id`), operator metadata (`display_name`,
+`notes`), and **`desired_state: active | downed`** returned on every heartbeat ack —
+the agent converges to it, so downed enforcement survives reboots and re-logons.
+`downed_content_id` selects the Content Library out-of-service image;
+`downed_reason` is the operator note. Liveness is derived (last heartbeat vs
+timeout), never stored as a flag.

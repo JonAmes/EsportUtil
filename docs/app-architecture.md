@@ -35,10 +35,11 @@ esportsutil.exe
 │                              protected veto) + operator approval / auto_remove job queue
 └── Agent role                 BackgroundService loop (each game PC)
     ├── register / PIN, heartbeat, report (wraps State Module + GameScanner)
+    │   └── heartbeat ack carries desired_state (active|downed) → agent reconciles
     ├── pull + apply baseline  (fetches baseline content_refs into local cache first)
     ├── content cache          ProgramData\EsportsUtil\content\, sha256-keyed, idempotent
     ├── job runner             (Phase 4: apply / init / steamcmd / remove_software /
-    │                          deploy_content)
+    │                          deploy_content / set_downed / clear_downed)
     └── UI surfaces            localhost HTML listener (:4310) + same-EXE --tray stub
                                (WinForms NotifyIcon, user session) — Edge renders both
                                dashboards; no Electron/WebView2 unless later required
@@ -57,6 +58,8 @@ shell over the Agent role; the service reports even when the window is closed.
 | Approved-software policy evaluation + protected veto | Server role (policy is data, not agent logic) | agent, dashboard |
 | Software removal execution (quiet uninstall / winget) | Core.StateModule (job handler) | server, dashboard |
 | Content Library storage + /content endpoint | Server role | agent (agent only caches) |
+| desired_state storage + downed-wallpaper selection (registry) | Server role | agent (agent only reconciles) |
+| Downed enforcement (session lock/re-lock, downed image) | Core.StateModule primitives | server decision logic, dashboard |
 | Content fetch/cache/verify (sha256) + deploy_content handler | Core.StateModule / agent job runner | server decision logic |
 | Software install (winget, Init only) | Core.StateModule | server |
 | Baseline model-matching | Core.StateModule selection, driven by server data | dashboard |
