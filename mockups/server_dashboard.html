@@ -76,6 +76,17 @@
   .esu .btn.primary { background: var(--acc); border-color: var(--acc); color: #fff; }
   .esu .btn.primary:hover { box-shadow: 0 0 14px color-mix(in srgb, var(--acc) 55%, transparent); }
 
+  /* ---- downed toggle ---- */
+  .esu .sw { width:34px; height:18px; border-radius:999px; background: color-mix(in srgb, var(--fg) 10%, transparent); border:1px solid var(--bdr); position:relative; cursor:pointer; transition:background .18s,border-color .18s; display:inline-block; vertical-align:middle; }
+  .esu .sw::after { content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:var(--mut); transition:left .18s,background .18s; }
+  .esu .sw[aria-checked="true"] { background: color-mix(in srgb, var(--mut) 45%, transparent); border-color: color-mix(in srgb, var(--fg) 45%, transparent); }
+  .esu .sw[aria-checked="true"]::after { left:18px; background:var(--fg); }
+  .esu .pill.dn { color: var(--mut); border-style: dashed; border-color: color-mix(in srgb, var(--fg) 35%, transparent); background: color-mix(in srgb, var(--fg) 5%, transparent); }
+  .esu .pill[hidden] { display: none; }
+  .esu tr.downed td { opacity:.55; }
+  .esu tr.downed td:last-child, .esu tr.downed td.swcell { opacity:1; }
+  .esu tr.downed .dev .dot { background: var(--mut); box-shadow:none; animation:none; }
+
   /* ---- heartbeat meter ---- */
   .esu .hb { width: 70px; height: 4px; border-radius: 999px; background: var(--hair); overflow: hidden; }
   .esu .hb i { display: block; height: 100%; border-radius: 999px; }
@@ -129,14 +140,14 @@
   <div class="sec">
     <div class="sec-h"><span class="t">Device Fleet</span><span class="rule"></span><span class="chip mono">PIN system</span></div>
     <table>
-      <thead><tr><th>Device</th><th>PIN</th><th>Heartbeat</th><th>Games</th><th>State</th><th></th></tr></thead>
+      <thead><tr><th>Device</th><th>PIN</th><th>Heartbeat</th><th>Games</th><th>State</th><th>Downed</th><th></th></tr></thead>
       <tbody>
-        <tr><td><span class="dev"><span class="dot ok"></span>LAN-PC-01</span></td><td><span class="pill ok">4821</span></td><td><div class="hb"><i style="width:96%;background:var(--ok)"></i></div></td><td class="mono">14</td><td><span class="pill ok">factory-synced</span></td><td><button class="btn" data-hermes-send="show me the locate overlay mockup">locate</button></td></tr>
-        <tr><td><span class="dev"><span class="dot ok"></span>LAN-PC-02</span></td><td><span class="pill ok">7734</span></td><td><div class="hb"><i style="width:90%;background:var(--ok)"></i></div></td><td class="mono">14</td><td><span class="pill warn">2 outdated</span></td><td><button class="btn" data-hermes-send="show me the locate overlay mockup">locate</button></td></tr>
-        <tr><td><span class="dev"><span class="dot warn"></span>LAN-PC-03</span></td><td><span class="pill ok">1190</span></td><td><div class="hb"><i style="width:93%;background:var(--ok)"></i></div></td><td class="mono">13</td><td><span class="pill warn">rollback required</span></td><td><button class="btn" data-hermes-send="show me the locate overlay mockup">locate</button></td></tr>
-        <tr><td><span class="dev"><span class="dot bad"></span>LAN-PC-04</span></td><td><span class="pill bad">5507 · missing</span></td><td><div class="hb"><i style="width:12%;background:var(--bad)"></i></div></td><td class="mono">—</td><td><span class="pill bad">agent down</span></td><td><button class="btn" disabled style="opacity:.35">locate</button></td></tr>
-        <tr><td><span class="dev"><span class="dot info"></span>LAB-PC-05</span></td><td><span class="pill info">awaiting pairing</span></td><td><div class="hb"><i style="width:99%;background:var(--info)"></i></div></td><td class="mono">9</td><td><span class="pill info">onboard</span></td><td><button class="btn" data-hermes-send="show me the locate overlay mockup">locate</button></td></tr>
-        <tr><td><span class="dev"><span class="dot ok"></span>LAB-PC-06</span></td><td><span class="pill ok">9042</span></td><td><div class="hb"><i style="width:88%;background:var(--ok)"></i></div></td><td class="mono">14</td><td><span class="pill ok">factory-synced</span></td><td><button class="btn" data-hermes-send="show me the locate overlay mockup">locate</button></td></tr>
+        <tr><td><span class="dev"><span class="dot ok"></span>LAN-PC-01</span></td><td><span class="pill ok">4821</span></td><td><div class="hb"><i style="width:96%;background:var(--ok)"></i></div></td><td class="mono">14</td><td><span class="pill orig ok">factory-synced</span><span class="pill dn" hidden>downed</span></td><td class="swcell"><span class="sw" role="switch" aria-checked="false" title="toggle downed state (swaps out-of-service wallpaper on the PC)"></span></td><td><button class="btn" data-hermes-send="show me the locate overlay mockup">locate</button></td></tr>
+        <tr><td><span class="dev"><span class="dot ok"></span>LAN-PC-02</span></td><td><span class="pill ok">7734</span></td><td><div class="hb"><i style="width:90%;background:var(--ok)"></i></div></td><td class="mono">14</td><td><span class="pill orig warn">2 outdated</span><span class="pill dn" hidden>downed</span></td><td class="swcell"><span class="sw" role="switch" aria-checked="false" title="toggle downed state (swaps out-of-service wallpaper on the PC)"></span></td><td><button class="btn" data-hermes-send="show me the locate overlay mockup">locate</button></td></tr>
+        <tr><td><span class="dev"><span class="dot warn"></span>LAN-PC-03</span></td><td><span class="pill ok">1190</span></td><td><div class="hb"><i style="width:93%;background:var(--ok)"></i></div></td><td class="mono">13</td><td><span class="pill orig warn">rollback required</span><span class="pill dn" hidden>downed</span></td><td class="swcell"><span class="sw" role="switch" aria-checked="false" title="toggle downed state (swaps out-of-service wallpaper on the PC)"></span></td><td><button class="btn" data-hermes-send="show me the locate overlay mockup">locate</button></td></tr>
+        <tr><td><span class="dev"><span class="dot bad"></span>LAN-PC-04</span></td><td><span class="pill bad">5507 · missing</span></td><td><div class="hb"><i style="width:12%;background:var(--bad)"></i></div></td><td class="mono">—</td><td><span class="pill orig bad">agent down</span><span class="pill dn" hidden>downed · queued</span></td><td class="swcell"><span class="sw" role="switch" aria-checked="false" title="agent unreachable — downed state is stored and will be applied when it returns"></span></td><td><button class="btn" disabled style="opacity:.35">locate</button></td></tr>
+        <tr><td><span class="dev"><span class="dot info"></span>LAB-PC-05</span></td><td><span class="pill info">awaiting pairing</span></td><td><div class="hb"><i style="width:99%;background:var(--info)"></i></div></td><td class="mono">9</td><td><span class="pill orig info">onboard</span><span class="pill dn" hidden>downed</span></td><td class="swcell"><span class="sw" role="switch" aria-checked="false" title="toggle downed state (swaps out-of-service wallpaper on the PC)"></span></td><td><button class="btn" data-hermes-send="show me the locate overlay mockup">locate</button></td></tr>
+        <tr><td><span class="dev"><span class="dot ok"></span>LAB-PC-06</span></td><td><span class="pill ok">9042</span></td><td><div class="hb"><i style="width:88%;background:var(--ok)"></i></div></td><td class="mono">14</td><td><span class="pill orig ok">factory-synced</span><span class="pill dn" hidden>downed</span></td><td class="swcell"><span class="sw" role="switch" aria-checked="false" title="toggle downed state (swaps out-of-service wallpaper on the PC)"></span></td><td><button class="btn" data-hermes-send="show me the locate overlay mockup">locate</button></td></tr>
       </tbody>
     </table>
   </div>
@@ -163,7 +174,19 @@
     </ul>
   </div>
 
-  <div class="foot"><span class="dot info" style="width:6px;height:6px"></span>mockup data — not live · click any button to drive the build</div>
+  <div class="foot"><span class="dot info" style="width:6px;height:6px"></span>mockup data — not live · click any button to drive the build · downed toggles are interactive in this mock</div>
 </div>
+<script>
+  document.querySelectorAll('.esu .sw').forEach(function(sw){
+    sw.addEventListener('click', function(){
+      var on = sw.getAttribute('aria-checked') === 'true';
+      sw.setAttribute('aria-checked', String(!on));
+      var tr = sw.closest('tr');
+      tr.classList.toggle('downed', !on);
+      var orig = tr.querySelector('.pill.orig'), dn = tr.querySelector('.pill.dn');
+      if (orig && dn) { orig.hidden = !on; dn.hidden = on; }
+    });
+  });
+</script>
 </body>
 </html>
