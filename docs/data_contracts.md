@@ -100,4 +100,5 @@ the agent converges to it, so the downed wallpaper is re-applied after reboots a
 logons. Downed is visual status only (wallpaper swap), never a session lock.
 `downed_content_id` selects the Content Library out-of-service image;
 `downed_reason` is the operator note. Liveness is derived (last heartbeat vs
-timeout), never stored as a flag.
+timeout), never stored as a flag. Transient one-shot directives (e.g. `locate`
+with expiry) ride the heartbeat ack and are **not** persisted in the registry.

@@ -35,7 +35,8 @@ esportsutil.exe
 │                              protected veto) + operator approval / auto_remove job queue
 └── Agent role                 BackgroundService loop (each game PC)
     ├── register / PIN, heartbeat, report (wraps State Module + GameScanner)
-    │   └── heartbeat ack carries desired_state (active|downed) → agent reconciles
+    │   └── heartbeat ack carries desired_state (active|downed) + one-shot
+    │       directives (locate, TTL) → agent reconciles / renders
     ├── pull + apply baseline  (fetches baseline content_refs into local cache first)
     ├── content cache          ProgramData\EsportsUtil\content\, sha256-keyed, idempotent
     ├── job runner             (Phase 4: apply / init / steamcmd / remove_software /
@@ -60,6 +61,7 @@ shell over the Agent role; the service reports even when the window is closed.
 | Content Library storage + /content endpoint | Server role | agent (agent only caches) |
 | desired_state storage + downed-wallpaper selection (registry) | Server role | agent (agent only reconciles) |
 | Downed wallpaper apply/restore (user-session wallpaper swap) | Core.StateModule wallpaper path | server decision logic, dashboard |
+| Locate overlay render (user-session, TTL self-dismiss) | agent UI surface (--tray / --overlay) | server stamps directive, dashboard button |
 | Content fetch/cache/verify (sha256) + deploy_content handler | Core.StateModule / agent job runner | server decision logic |
 | Software install (winget, Init only) | Core.StateModule | server |
 | Baseline model-matching | Core.StateModule selection, driven by server data | dashboard |
