@@ -14,7 +14,7 @@
     "desired_state": {
       "enum": ["active", "downed"],
       "default": "active",
-      "description": "Reconciliation target pushed in the heartbeat ack. While downed, the agent keeps the machine locked/out-of-service continuously; enforcement mechanics are Phase 4."
+      "description": "Reconciliation target pushed in the heartbeat ack. While downed, the agent displays the out-of-service wallpaper (re-applied on logon) — visual status only, no session lock. Mechanics are Phase 4."
     },
     "downed_content_id": {
       "type": ["string", "null"],

@@ -96,7 +96,8 @@ factories, jobs, and dashboards; URLs and local paths never cross the wire.
 Schema: `schemas/device_registry.schema.json`. One entry per registered client:
 immutable identity (`device_pin`, `client_id`), operator metadata (`display_name`,
 `notes`), and **`desired_state: active | downed`** returned on every heartbeat ack —
-the agent converges to it, so downed enforcement survives reboots and re-logons.
+the agent converges to it, so the downed wallpaper is re-applied after reboots and
+logons. Downed is visual status only (wallpaper swap), never a session lock.
 `downed_content_id` selects the Content Library out-of-service image;
 `downed_reason` is the operator note. Liveness is derived (last heartbeat vs
 timeout), never stored as a flag.

@@ -59,7 +59,7 @@ shell over the Agent role; the service reports even when the window is closed.
 | Software removal execution (quiet uninstall / winget) | Core.StateModule (job handler) | server, dashboard |
 | Content Library storage + /content endpoint | Server role | agent (agent only caches) |
 | desired_state storage + downed-wallpaper selection (registry) | Server role | agent (agent only reconciles) |
-| Downed enforcement (session lock/re-lock, downed image) | Core.StateModule primitives | server decision logic, dashboard |
+| Downed wallpaper apply/restore (user-session wallpaper swap) | Core.StateModule wallpaper path | server decision logic, dashboard |
 | Content fetch/cache/verify (sha256) + deploy_content handler | Core.StateModule / agent job runner | server decision logic |
 | Software install (winget, Init only) | Core.StateModule | server |
 | Baseline model-matching | Core.StateModule selection, driven by server data | dashboard |
