@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "MasterManifest",
-  "description": "Server source of truth. factory_state entries embed the golden PC's MachineState.ps1 Record JSON VERBATIM plus factory metadata; no restated machine fields.",
+  "description": "Server source of truth. factory_state entries embed the golden PC's State Module Record JSON (C# agent) VERBATIM plus factory metadata; no restated machine fields.",
   "type": "object",
   "required": ["master_list", "factory_state_map"],
   "properties": {

@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Approved Software Policy",
+  "description": "Venue-wide allow-list governing which installed applications are permitted on game PCs. Evaluated server-side against each agent's full installed-software inventory (machine_state). Anything not matched by an allow rule is unapproved: Phase 2 flags it (report-only); Phase 4 may queue a remove_software job for operator-approved or policy-auto removal. Separate contract from the Master Manifest, which stays two-part.",
+  "type": "object",
+  "required": ["version", "updated_timestamp", "default_action", "allow", "protected"],
+  "properties": {
+    "version": {"type": "integer", "minimum": 1},
+    "updated_timestamp": {"type": "string", "format": "date-time"},
+    "default_action": {
+      "type": "string",
+      "enum": ["report_only", "flag_for_removal", "auto_remove"],
+      "description": "Venue-wide default for unapproved apps. report_only = dashboard/alert only (Phase 2 baseline). flag_for_removal = removable after operator approves per-item. auto_remove = server may queue remove_software jobs unattended; must be an explicit operator choice per venue."
+    },
+    "allow": {
+      "type": "array",
+      "description": "Allow-list rules. An installed app is approved if any rule matches. Matching keys are ANDed within a rule.",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "description": "DisplayName exact match (case-insensitive)."},
+          "name_prefix": {"type": "string", "description": "Optional DisplayName prefix, e.g. 'Microsoft Visual C++ 20' to cover redistributables."},
+          "publisher": {"type": "string", "description": "Optional Publisher exact match (case-insensitive)."},
+          "notes": {"type": "string"}
+        }
+      }
+    },
+    "protected": {
+      "type": "array",
+      "description": "Hard removal veto, evaluated even under auto_remove and independent of allow-list matching. Matches by name/name_prefix/publisher like allow rules. Baseline expectations: device drivers, Windows components, security products, EsportsUtil agent, and approved launcher/infrastructure apps.",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string"},
+          "name_prefix": {"type": "string"},
+          "publisher": {"type": "string"},
+          "notes": {"type": "string"}
+        }
+      }
+    },
+    "idle_window": {
+      "type": "string",
+      "description": "Optional local-time window during which remove_software jobs may run on idle machines, e.g. '02:00-08:00'. Absent = idle-detection only (no active game session, no foreground user activity).",
+      "pattern": "^[0-2][0-9]:[0-5][0-9]-[0-2][0-9]:[0-5][0-9]$"
+    }
+  }
+}

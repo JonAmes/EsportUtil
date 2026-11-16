@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>E-Sports Dashboard — Client Agent</title>
+<style>
+  :root{
+    --fg: var(--foreground, #e6e6e9);
+    --mut: var(--muted-foreground, #8b8b93);
+    --acc: var(--accent, #5b8cff);
+    --bdr: var(--border, #26262c);
+    --card: var(--card, #16161a);
+    --hair: rgba(255,255,255,.06);
+    --ok:#10b981; --warn:#d97706; --bad:#ef4444; --info:#38bdf8;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{ font:13px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif; color:var(--fg);
+       background:transparent; padding:20px; }
+  .wrap{ width:min(920px,100%); min-width:560px; }
+  .mono{ font-family:ui-monospace,'Cascadia Code',Consolas,monospace; font-size:12px; }
+
+  /* titlebar */
+  .titlebar{ display:flex; align-items:center; gap:10px; padding:10px 14px;
+    background:linear-gradient(180deg, rgba(255,255,255,.04), transparent), var(--card);
+    border:1px solid var(--bdr); border-radius:10px 10px 0 0; }
+  .logo{ width:22px; height:22px; border-radius:6px;
+    background:linear-gradient(135deg, var(--acc), #9a6bff); }
+  .titlebar h1{ font-size:14px; font-weight:650; }
+  .titlebar .sub{ color:var(--mut); font-size:12px; }
+  .dots{ margin-left:auto; display:flex; gap:6px; }
+  .wdot{ width:10px; height:10px; border-radius:50%; background:var(--bdr); }
+
+  .win{ border:1px solid var(--bdr); border-top:none; border-radius:0 0 10px 10px;
+    background:var(--card); padding:16px; display:grid; gap:14px; }
+
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .card{ background:rgba(255,255,255,.02); border:1px solid var(--bdr);
+    border-radius:8px; padding:12px 14px; }
+  .card h2{ font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--mut); margin-bottom:8px; font-weight:600; }
+  .kv{ display:flex; justify-content:space-between; align-items:baseline; gap:14px; padding:3px 0;
+    border-bottom:1px solid var(--hair); }
+  .kv .v{ text-align:right; }
+  .kv:last-child{ border-bottom:none; }
+  .kv .k{ color:var(--mut); }
+  .pill{ display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px;
+    border:1px solid currentColor; }
+  .pill.ok{ color:var(--ok); } .pill.warn{ color:var(--warn); }
+  .pill.bad{ color:var(--bad); } .pill.info{ color:var(--info); }
+  .pulse{ display:inline-block; width:8px; height:8px; border-radius:50%;
+    background:var(--ok); margin-right:6px; animation:pl 2s infinite; }
+  @keyframes pl{ 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  .bigpin{ font-size:30px; letter-spacing:.35em; font-weight:700; color:var(--acc); }
+  .btn{ display:inline-block; margin-top:10px; padding:7px 14px; border-radius:7px;
+    background:var(--acc); color:#fff; font-weight:600; font-size:12.5px; cursor:pointer;
+    border:1px solid transparent; }
+  .btn.ghost{ background:transparent; border-color:var(--bdr); color:var(--fg); }
+  .btn.danger{ background:transparent; border-color:var(--bad); color:var(--bad); }
+
+  table{ width:100%; border-collapse:collapse; }
+  th:last-child, td:last-child{ width:52px; }
+  th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.07em;
+    color:var(--mut); padding:4px 6px; border-bottom:1px solid var(--bdr); }
+  td{ padding:6px; border-bottom:1px solid var(--hair); }
+  tr:last-child td{ border-bottom:none; }
+  tr:hover td{ background:rgba(255,255,255,.02); }
+  .ver{ font-family:ui-monospace,monospace; background:rgba(255,255,255,.05);
+    padding:1px 6px; border-radius:5px; font-size:11.5px; }
+  .chk{ width:14px; height:14px; border-radius:4px; border:1.5px solid var(--mut);
+    display:inline-block; vertical-align:-2px; margin-right:8px; }
+  .chk.on{ background:var(--ok); border-color:var(--ok); position:relative; }
+  .chk.on::after{ content:"✓"; color:#04121c; font-size:10px; position:absolute; left:2px; top:0; }
+  .chk.off{ background:transparent; border-color:var(--mut); }
+
+  .bar{ height:6px; border-radius:3px; background:var(--bdr); overflow:hidden; }
+  .bar i{ display:block; height:100%; background:var(--ok); }
+
+  .foot{ display:flex; gap:14px; align-items:center; color:var(--mut);
+    font-size:11.5px; padding:10px 4px 0; }
+
+  /* tray flyout */
+  .tray{ position:relative; width:250px; background:var(--card); border:1px solid var(--bdr);
+    border-radius:9px; padding:10px 12px; display:inline-block; vertical-align:top; }
+  .tray h3{ font-size:12px; margin-bottom:6px; }
+  .tray .kv{ font-size:11.5px; }
+  .side{ display:inline-block; vertical-align:top; margin-left:14px; }
+  .note{ color:var(--mut); font-size:11.5px; margin-top:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="titlebar">
+    <div class="logo"></div>
+    <div><h1>E-Sports Dashboard <span style="color:var(--mut)">· Client Agent</span></h1>
+      <div class="sub">esportsutil.exe — v0.1.0 — role: agent (C# / .NET 8, self-contained single EXE) — running as Windows service</div></div>
+    <div class="dots"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span></div>
+  </div>
+
+  <div class="win">
+
+    <div class="grid2">
+      <div class="card">
+        <h2>Pairing · Onboarding</h2>
+        <div style="display:flex; align-items:center; gap:14px;">
+          <div class="bigpin mono">3316</div>
+          <div>
+            <span class="pill info">awaiting pairing</span>
+            <div style="color:var(--mut); margin-top:6px;">Show this PIN to the operator<br>at the server dashboard.</div>
+          </div>
+        </div>
+        <div class="kv"><span class="k">Hardware ID (DevicePin source)</span><span class="mono">DN:9c2e…b1f4</span></div>
+        <div class="kv"><span class="k">Machine model</span><span>Alienware Aurora R12</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Liveness · Reporting</h2>
+        <div class="kv"><span class="k">Server</span><span><span class="pulse"></span>connected — http://esrv.lan:8080</span></div>
+        <div class="kv"><span class="k">Heartbeat</span><span class="mono">every 30s · last 2s ago</span></div>
+        <div class="kv"><span class="k">Last full report</span><span class="mono">14:02:31 · 23 games</span></div>
+        <div class="kv"><span class="k">Local manifest</span><span><span class="pill ok">in sync</span></span></div>
+        <div style="margin-top:10px;"><span class="btn ghost" data-hermes-send="Run a client report now">Report now</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Factory State · Baseline</h2>
+      <div class="grid2" style="grid-template-columns:1.1fr 1fr;">
+        <div>
+          <div class="kv"><span class="k">Matched baseline</span><span class="mono">fs-aurora-r12-2026-11</span></div>
+          <div class="kv"><span class="k">Match rule</span><span>machineModel = “Alienware Aurora R12” · newest capture</span></div>
+          <div class="kv"><span class="k">Applied</span><span class="mono">2026-11-12 09:41 · idempotent re-run safe</span></div>
+          <div class="kv"><span class="k">Drift since apply</span><span><span class="pill warn">4 items</span> wallpaper, 2 startup disabled, screensaver</span></div>
+        </div>
+        <div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <span class="btn danger" data-hermes-send="Restore this client to its factory state baseline">Restore factory state</span>
+            <span class="btn ghost" data-hermes-send="Record this PC as a golden state on the server">Record as golden</span>
+          </div>
+          <div class="note">Apply restores resolution · startup set · screensaver · wallpaper. Missing apps are <b>reported</b>, never silently installed.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Software · Init provisioning <span class="pill info" style="text-transform:none;">first-run / Init only</span></h2>
+      <table>
+        <tr><th></th><th>App</th><th>Status</th><th>Boot</th></tr>
+        <tr><td><span class="chk on"></span></td><td>Steam</td><td><span class="pill ok">installed</span> <span class="ver">2.10.5</span></td><td>yes</td></tr>
+        <tr><td><span class="chk on"></span></td><td>Epic Games Launcher</td><td><span class="pill ok">installed</span> <span class="ver">19.1.1</span></td><td>no</td></tr>
+        <tr><td><span class="chk on"></span></td><td>7-Zip</td><td><span class="pill ok">installed</span> <span class="ver">24.08</span></td><td>—</td></tr>
+        <tr><td><span class="chk on"></span></td><td>Discord</td><td><span class="pill ok">installed</span> <span class="ver">1.0.9018</span></td><td>yes</td></tr>
+        <tr><td><span class="chk off"></span></td><td>VLC</td><td><span class="pill bad">missing</span></td><td>—</td></tr>
+        <tr><td><span class="chk off"></span></td><td>OBS Studio</td><td><span class="pill bad">missing</span></td><td>—</td></tr>
+      </table>
+      <div style="margin-top:10px;"><span class="btn" data-hermes-send="Install the missing apps on this client via winget">Install missing (winget)</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Jobs · Server-issued <span class="pill warn" style="text-transform:none;">Phase 4 preview</span></h2>
+      <table>
+        <tr><th>Time</th><th>Job</th><th>Target</th><th>Result</th></tr>
+        <tr><td class="mono">13:55</td><td>apply_baseline</td><td class="mono">fs-aurora-r12-2026-11</td><td><span class="pill ok">success</span></td></tr>
+        <tr><td class="mono">14:01</td><td>steamcmd app_update</td><td class="mono">730 · CS2</td><td><span class="pill ok">1.39.7.0 → 1.39.8.1</span></td></tr>
+        <tr><td class="mono">14:03</td><td>install_app</td><td class="mono">vlc</td><td><span class="pulse"></span><span class="pill info">winget running…</span></td></tr>
+      </table>
+    </div>
+
+    <div style="display:flex; gap:14px; align-items:flex-start;">
+      <div class="tray">
+        <h3>🖥 System tray flyout</h3>
+        <div class="kv"><span class="k">Status</span><span><span class="pulse"></span>paired · healthy</span></div>
+        <div class="kv"><span class="k">Display</span><span>LAB-PC-05</span></div>
+        <div class="kv"><span class="k">Drift</span><span><span class="pill warn">4</span></span></div>
+        <span class="btn ghost" style="margin-top:8px;" data-hermes-send="Open the client agent window">Open agent</span>
+      </div>
+      <div class="side">
+        <div class="note">Window is the operator view; the service reports even when it's closed.<br>
+        Right-click tray icon → Report now · Factory state · Open logs.<br>
+        Config: <span class="mono">agent.config.json</span> — server URL, scan roots, folder→game_id map.</div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span>service: <b>EsportsUtilAgent</b> · auto-start</span>
+      <span>guardrails: naming · WU settings · drivers — never touched</span>
+      <span style="margin-left:auto;" class="mono">machine_state → server verbatim · no field translation</span>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
