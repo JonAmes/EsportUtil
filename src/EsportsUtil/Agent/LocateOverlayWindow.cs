@@ -138,10 +138,11 @@ public static class LocateOverlayWindow
             var w = ClientSize.Width;
             var h = ClientSize.Height;
 
-            // Stage: near-black with the mockup's faint corner glows (wallpaper hint under the dim layer).
+            // Stage: near-black with the mockup's corner glows, sized to the window
+            // (mockup: radial 120%x90% at 20% 10%, radial 80%x70% at 85% 90%).
             g.Clear(Base);
-            DrawGlow(g, new Rectangle(-w / 4, -h / 4, w, h), Color.FromArgb(60, 22, 35, 61));
-            DrawGlow(g, new Rectangle(w / 2, h / 2, w, h), Color.FromArgb(45, 27, 20, 48));
+            DrawGlow(g, new Rectangle((int)(-0.4f * w), (int)(-0.35f * h), (int)(1.2f * w), (int)(0.9f * h)), Color.FromArgb(60, 22, 35, 61));
+            DrawGlow(g, new Rectangle((int)(0.45f * w), (int)(0.55f * h), (int)(0.8f * w), (int)(0.7f * h)), Color.FromArgb(45, 27, 20, 48));
 
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var name = _req.DisplayName.ToUpperInvariant();
