@@ -1,0 +1,54 @@
+using System.Collections.Concurrent;
+using EsportsUtil.Core;
+
+namespace EsportsUtil.Server;
+
+/// <summary>MasterManifest.json storage — the venue source of truth (master list + factory state map).
+/// Also stores each client's last Local Manifest as proof-of-state, with a small summary for the dashboard.</summary>
+public sealed class ManifestStore
+{
+    private readonly string _dataDir;
+    private readonly object _gate = new();
+
+    public ManifestStore(string dataDir)
+    {
+        _dataDir = dataDir;
+        Directory.CreateDirectory(dataDir);
+        Directory.CreateDirectory(ReportsDir);
+    }
+
+    private string ManifestPath => Path.Combine(_dataDir, "MasterManifest.json");
+    public string ReportsDir => Path.Combine(_dataDir, "reports");
+
+    public MasterManifest LoadMaster()
+    {
+        lock (_gate)
+        {
+            return File.Exists(ManifestPath)
+                ? Wire.FromJson<MasterManifest>(File.ReadAllText(ManifestPath))
+                  ?? new MasterManifest(1, DateTimeOffset.UtcNow, new(), new())
+                : new MasterManifest(1, DateTimeOffset.UtcNow, new(), new());
+        }
+    }
+
+    public void SaveMaster(MasterManifest m)
+    {
+        lock (_gate)
+            File.WriteAllText(ManifestPath, Wire.ToJson(m with { UpdatedTimestamp = DateTimeOffset.UtcNow }));
+    }
+
+    public void SaveReport(LocalManifest report, string contentHash)
+    {
+        lock (_gate)
+            File.WriteAllText(Path.Combine(ReportsDir, report.ClientId + ".json"), Wire.ToJson(report));
+        Summaries[report.ClientId] = new ManifestSummary(
+            report.ClientId, report.ReportTimestamp, contentHash, report.GameReports.Count,
+            report.Duplicates?.Count ?? 0, report.AgentVersion,
+            report.MachineState?["machineModel"]?.GetValue<string>());
+    }
+
+    public sealed record ManifestSummary(string ClientId, DateTimeOffset ReportTimestamp, string ContentHash,
+        int GameCount, int DuplicateCount, string AgentVersion, string? MachineModel);
+
+    public ConcurrentDictionary<string, ManifestSummary> Summaries { get; } = new();
+}

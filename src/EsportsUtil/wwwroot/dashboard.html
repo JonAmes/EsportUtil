@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>E-Sports Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0d0f12;--card:#16191e;--fg:#eceef1;--mut:#9aa3ad;--bdr:rgba(255,255,255,.09);
+--acc:#5b8cff;--ok:#3ecf8e;--warn:#f5a623;--crit:#ef5b5b;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;align-items:center}
+.wrap{width:min(1080px,100%);min-width:560px;padding:28px 24px 40px}
+h1{font-size:20px;font-weight:700;margin:0}
+.sub{color:var(--mut);font-size:12.5px;margin:2px 0 22px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
+.card{background:var(--card);border:1px solid var(--bdr);border-radius:10px;padding:14px 16px}
+.card .k{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.card .v{font-size:24px;font-weight:700;margin-top:4px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--bdr);border-radius:10px;overflow:hidden}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);text-align:left;padding:10px 12px;border-bottom:1px solid var(--bdr)}
+td{padding:10px 12px;border-bottom:1px solid var(--bdr);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;background:var(--mut)}
+.dot.on{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+.dot.off{background:var(--crit)}
+.pin{font-family:ui-monospace,Consolas,monospace;color:var(--mut)}
+.btn{background:transparent;border:1px solid var(--bdr);color:var(--fg);border-radius:7px;padding:4px 10px;font-size:12px;cursor:pointer}
+.btn:hover{border-color:var(--acc);color:var(--acc)}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--bdr);color:var(--mut)}
+.pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
+.pill.dn{color:var(--mut);border-style:dashed;border-color:color-mix(in srgb,var(--fg) 35%,transparent);background:color-mix(in srgb,var(--fg) 5%,transparent)}
+.pill[hidden]{display:none}
+.sw{width:34px;height:18px;border-radius:999px;background:color-mix(in srgb,var(--fg) 10%,transparent);border:1px solid var(--bdr);position:relative;cursor:pointer;transition:background .18s,border-color .18s;display:inline-block;vertical-align:middle}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--mut);transition:left .18s,background .18s}
+.sw[aria-checked="true"]{background:color-mix(in srgb,var(--mut) 45%,transparent);border-color:color-mix(in srgb,var(--fg) 45%,transparent)}
+.sw[aria-checked="true"]::after{left:18px;background:var(--fg)}
+tr.downed td{opacity:.55}
+tr.downed td:last-child,tr.downed td.swcell{opacity:1}
+.alerts{margin-top:22px}
+.alert{font-size:12.5px;color:var(--mut);padding:6px 0;border-bottom:1px dashed var(--bdr)}
+.alert b{font-weight:600}.alert.crit b{color:var(--crit)}.alert.info b{color:var(--ok)}
+.foot{margin-top:18px;color:var(--mut);font-size:12px}
+th{white-space:nowrap}
+.dup{color:var(--warn);font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>E-Sports Dashboard</h1>
+  <div class="sub">esportsutil.exe — role: server — <span id="clock">…</span></div>
+
+  <div class="cards">
+    <div class="card"><div class="k">Agents reporting</div><div class="v" id="c-agents">–</div></div>
+    <div class="card"><div class="k">Manifest version</div><div class="v" id="c-manifest">–</div></div>
+    <div class="card"><div class="k">Factory entries</div><div class="v" id="c-factory">–</div></div>
+    <div class="card"><div class="k">Alerts (last 50)</div><div class="v" id="c-alerts">–</div></div>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th>Device</th><th>PIN</th><th>Model</th><th>Games</th><th>Check-in</th>
+      <th>State</th><th>Downed</th><th>Actions</th>
+    </tr></thead>
+    <tbody id="rows"><tr><td colspan="8" style="color:var(--mut)">connecting to server…</td></tr></tbody>
+  </table>
+
+  <div class="alerts"><div class="k" style="color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Recent alerts</div><div id="alerts"></div></div>
+  <div class="foot">rename, downed and locate act live against the device registry — downed applies on the agent's next heartbeat ack; locate is a one-shot directive with TTL.</div>
+</div>
+<script>
+async function api(path, body){
+  const r = await fetch(path, body ? {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)} : {});
+  return r.json();
+}
+async function rename(cid, cur){
+  const name = prompt('Display name for this device:', cur === null ? '' : cur);
+  if (name) await api('/api/rename',{client_id:cid, display_name:name});
+  refresh();
+}
+async function toggleDown(cid, on){
+  await api('/api/downed',{client_id:cid, desired_state: on ? 'downed' : 'active',
+    downed_content_id: on ? 'out-of-service' : null});
+  refresh();
+}
+async function locate(cid){ await api('/api/locate/'+cid, {}); refresh(); }
+async function printLabel(cid){ const r = await api('/api/print-label/'+cid, {}); if(r.artifact) alert('label artifact: '+r.artifact); }
+
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function refresh(){
+  let d;
+  try { d = await (await fetch('/api/state')).json(); }
+  catch { document.getElementById('rows').innerHTML = '<tr><td colspan="8" style="color:var(--crit)">server unreachable</td></tr>'; return; }
+  document.getElementById('clock').textContent = new Date(d.server_time).toLocaleTimeString();
+  document.getElementById('c-agents').textContent = d.agents_reporting + ' / ' + d.agents_total;
+  document.getElementById('c-manifest').textContent = d.manifest_version;
+  document.getElementById('c-factory').textContent = d.factory_entries;
+  document.getElementById('c-alerts').textContent = d.alerts.length;
+
+  document.getElementById('rows').innerHTML = d.devices.map(dev => {
+    const dot = dev.online ? 'on' : 'off';
+    const ago = dev.last_heartbeat_sec_ago === null ? 'never' : Math.round(dev.last_heartbeat_sec_ago) + 's ago';
+    const dn = dev.desired_state === 'downed';
+    const dupNote = dev.duplicates ? `<div class="dup">${dev.duplicates} duplicate game id(s) awaiting server resolution</div>` : '';
+    return `<tr class="${dn?'downed':''}">
+      <td><a href="#" style="color:inherit;text-decoration:none" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`});return false">${esc(dev.display_name)}${dev.pending?' <span class="pin">(awaiting name)</span>':''}</a>${dupNote}</td>
+      <td class="pin">${esc(dev.device_pin)}</td>
+      <td>${esc(dev.machine_model ?? '—')}</td>
+      <td>${dev.games ?? '—'}</td>
+      <td>${ago}</td>
+      <td>
+        <span class="pill ${dn?'':'ok'}" ${dn?'hidden':''}>active</span>
+        <span class="pill dn" ${dn?'':'hidden'}>${dev.online?'downed':'downed · queued'}</span>
+      </td>
+      <td class="swcell"><span class="sw" role="switch" aria-checked="${dn}" title="toggle downed state (swaps out-of-service wallpaper on the PC)" onclick="toggleDown('${dev.client_id}', !${dn})"></span></td>
+      <td>
+        <button class="btn" ${dev.online?'':'disabled'} onclick="locate('${dev.client_id}')">locate</button>
+        <button class="btn" onclick="printLabel('${dev.client_id}')">label</button>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="8" style="color:var(--mut)">no agents registered yet — onboard a PC with its PIN</td></tr>';
+
+  document.getElementById('alerts').innerHTML = d.alerts.slice(0,8).map(a =>
+    `<div class="alert ${a.severity}"><b>${esc(a.type)}</b> · ${esc(a.client_id)} · ${esc(a.message)} · ${new Date(a.timestamp).toLocaleTimeString()}</div>`
+  ).join('') || '<div class="alert">none</div>';
+}
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

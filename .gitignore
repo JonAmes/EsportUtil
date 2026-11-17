@@ -1,0 +1,8 @@
+# Persistent venue state (registry, manifests, content, labels, identity)
+data/
+*.local.json
+
+# .NET build output
+bin/
+obj/
+*.user

@@ -72,4 +72,16 @@ The project will proceed through the following phases:
 *   **Locate Overlay (`locate` directive):** the dashboard has a per-PC **locate** button; the server stamps a one-shot `locate` directive with an expiry (default 30 s, configurable) into that machine's next heartbeat ack. The agent renders a **full-screen, topmost overlay in the user session** via the same-EXE UI process (the `--tray` stub, or a `--overlay` mode launched into the active session): giant `display_name`, station metadata line, a **QR encoding the DevicePin** — the same payload as the printed label, so the operator can scan and confirm identity at the desk — pulsing accent border, and a visible auto-dismiss countdown. Closes on expiry, click, or ESC; the expiry also means a late ack can never pop a stale overlay, and an agent that's down simply never shows one (which is itself information). Transient and self-dismissing, so zero steady-state cost against the resource budget.
 
 ## ⏳ Current Status
-Status: Planning Complete. Readiness check for: Device Onboarding (PIN System) and Heartbeat Implementation.
+Status: **Phase 1 implemented and test-passing** (C# single EXE, `src/EsportsUtil`). Done & verified on the dev box:
+* Contracts (`Core/Contracts.cs`) mirror the JSON schemas field-for-field; wire JSON is snake_case; `ReportHash` content-hash dedupe (timestamps normalized out) means unchanged state costs ~zero bandwidth/disk.
+* GameScanner: folder-structure discovery, folder→`game_id` normalization, launcher root detection, version probes, cross-root duplicate detection reported as `duplicates` + `DUPLICATE_FOUND` statuses.
+* StateModule **Record** port (identity incl. model, software inventory, startup, wallpaper/screensaver — Windows registry paths compile, Windows-runtime exercise pending); `machine_state` reported verbatim as opaque object.
+* Device registry: PIN onboarding gate (4-digit, deterministic per machine), pending→operator rename, `desired_state` downed persisted for offline agents (queued), TTL one-shot directives (locate) delivered exactly once via heartbeat ack.
+* Heartbeat + liveness monitor: `heartbeat_lost` critical alert then `heartbeat_recovered` after timeout; alerts via in-process `System.Threading.Channels` hub surfaced on the live dashboard.
+* Content Library: manifest + `GET /content/{id}` + sha256-verified fetch verified end-to-end; label print endpoint with file-artifact fallback verified.
+* **Live server dashboard** served by the EXE (`wwwroot/dashboard.html`): fleet table with per-PC rename, downed switch, locate and label actions; polls `/api/state` every 3 s.
+* **Resource gate (PLAN acceptance):** automated perf assertion in `src/EsportsUtil.Tests` (dependency-free runner, 31 checks) measures a standalone idle agent: measured `cpu=0.00% / 20 s, peak RSS 55.0 MB` → both budgets pass (nightly runs `PERF_SECS=300` for the 5-min window).
+
+Remaining Phase 1 residuals (Windows-box gates, not Linux-verifiable here): StateModule registry/WMI reads at real runtime, `System.Drawing.Printing` label path vs the file fallback.
+
+Next phase: **Phase 2 — Master Manifest & Comparison Logic** (diff vs `MasterManifest.json`, approved-software report-only evaluation).
