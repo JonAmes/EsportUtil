@@ -186,6 +186,29 @@ Check(await Until(async () => (Wire.FromJson<JsonDoc>(await probe2.GetStringAsyn
     "T10b compliance warn alert fires once when the issue set appears");
 cts2.Cancel(); await loopTask2; await app2.StopAsync();
 
+// ---------- T12: Phase 3 — toast XML + notification daemon drains queue, survives notifier failure ----------
+var toastXml = ToastXml.Build(new Alert("compliance", "critical", "Dota <2> & \"x\"", "c1", "8842", DateTimeOffset.UtcNow), "http://127.0.0.1:4300/");
+Check(toastXml.Contains("scenario=\"immediate\"") && toastXml.Contains("Notification.IM")
+    && toastXml.Contains("Dota &lt;2&gt; &amp; &quot;x&quot;") && toastXml.Contains("#8842")
+    && toastXml.Contains("activationType=\"uri\""),
+    "T12a critical toast: immediate scenario, escaped body, PIN line, dashboard action");
+var infoXml = ToastXml.Build(new Alert("heartbeat_recovered", "info", "back", "c1", null, DateTimeOffset.UtcNow), "http://x/");
+Check(!infoXml.Contains("scenario=\"immediate\"") && infoXml.Contains("duration=\"short\""),
+    "T12b info toast: short duration, never immediate");
+
+var hub12 = new AlertHub();
+var delivered = new List<string>();
+var notifySvc = new NotificationService(hub12, new RecordingNotifier(delivered),
+    Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+await notifySvc.StartAsync(CancellationToken.None);
+await hub12.PublishAsync(new Alert("a1", "info", "m", "c1", "1111", DateTimeOffset.UtcNow));
+await hub12.PublishAsync(new Alert("boom", "warn", "toast host missing", "c1", "1111", DateTimeOffset.UtcNow));
+await hub12.PublishAsync(new Alert("a2", "critical", "m", "c1", "1111", DateTimeOffset.UtcNow));
+Check(await Until(() => Task.FromResult(delivered.Count == 3), 10), "T12c hosted NotificationService drains the queue");
+Check(delivered.SequenceEqual(new[] { "a1", "boom", "a2" }),
+    "T12d notifier throw does not stop the queue (order preserved, delivery continues)");
+await notifySvc.StopAsync(CancellationToken.None);
+
 // ---------- T11: resource budget gate (PLAN.md) — standalone agent, idle ----------
 var perfSecs = int.TryParse(Environment.GetEnvironmentVariable("PERF_SECS"), out var ps) ? ps : 20;
 var agentBin = Path.Combine(AppContext.BaseDirectory, "esportsutil.dll");
@@ -235,3 +258,13 @@ file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
 file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues);
 file sealed record IssueDoc(string kind, string subject);
 file sealed record AlertDoc(string type, string severity);
+
+file sealed class RecordingNotifier(List<string> log) : EsportsUtil.Server.INotifier
+{
+    public Task NotifyAsync(Alert a, CancellationToken ct)
+    {
+        log.Add(a.Type);
+        if (a.Type == "boom") throw new InvalidOperationException("simulated toast host failure");
+        return Task.CompletedTask;
+    }
+}

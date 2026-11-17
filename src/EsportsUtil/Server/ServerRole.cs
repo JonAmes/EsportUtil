@@ -42,12 +42,19 @@ public static class ServerRole
         var issueHashes = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
 
         builder.Services.AddHostedService(_ => new LivenessMonitor(registry, hub, cfg.HeartbeatTimeoutSec));
+
+        // Phase 3 — hosted notification daemon drains the queue; Windows toast on the server box, console on dev.
+        INotifier notifier =
+#if WINDOWS
+            OperatingSystem.IsWindows() && cfg.ToastNotifications ? new WindowsToastNotifier(cfg.ServerUrl) :
+#endif
+            new ConsoleNotifier();
+        builder.Services.AddHostedService(sp => new NotificationService(hub, notifier,
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger("esportsutil.notify")));
         builder.Services.AddSingleton(hub);
 
         var app = builder.Build();
         var log = (logs ?? app.Services.GetRequiredService<ILoggerFactory>()).CreateLogger("esportsutil.server");
-        _ = hub.ConsumeAsync(a => log.LogWarning("[alert] {sev} {type} {dev} ({pin}): {msg}",
-            a.Severity, a.Type, a.ClientId, a.DevicePin, a.Message), app.Lifetime.ApplicationStopping);
 
         // ---- onboarding gate ----
         app.MapPost("/api/register", (RegisterRequest req) =>

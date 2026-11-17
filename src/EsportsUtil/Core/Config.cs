@@ -16,6 +16,7 @@ public sealed class EsportsConfig
     public int SlowScanIntervalMin { get; set; } = 15;           // never scan per-heartbeat
     public int LocateTtlSec { get; set; } = 30;
     public string Printer { get; set; } = "";                    // named Windows queue; "" = file fallback
+    public bool ToastNotifications { get; set; } = true;         // Windows toast on the server box (Phase 3)
     public Budget Budgets { get; set; } = new();
 
     public sealed class Budget

@@ -2,8 +2,10 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <!-- net8.0 = dev/Linux build; net8.0-windows10.0.19041.0 = Windows build with WinRT toast projection -->
+    <TargetFrameworks>net8.0;net8.0-windows10.0.19041.0</TargetFrameworks>
     <RollForward>LatestMajor</RollForward>  <!-- dev boxes may only have a newer shared runtime -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>  <!-- lets the Linux dev box compile the Windows TFM -->
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>esportsutil</AssemblyName>
@@ -12,6 +14,10 @@
     <!-- Resource budget: workstation GC, no concurrent background GC churn (PLAN.md) -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0-windows10.0.19041.0'">
+    <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

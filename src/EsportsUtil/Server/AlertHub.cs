@@ -20,10 +20,8 @@ public sealed class AlertHub
         await _ch.Writer.WriteAsync(a);
     }
 
-    public Task ConsumeAsync(Action<Alert> sink, CancellationToken ct) => Task.Run(async () =>
-    {
-        await foreach (var a in _ch.Reader.ReadAllAsync(ct)) sink(a);
-    }, ct);
+    /// <summary>Drained by the hosted NotificationService (Phase 3) — ingestion never blocks on delivery.</summary>
+    public ChannelReader<Alert> Reader => _ch.Reader;
 
     public List<Alert> Recent() { lock (_gate) return _recent.ToList(); }
 }
