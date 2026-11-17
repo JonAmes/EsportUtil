@@ -94,7 +94,7 @@ public sealed class AgentClient(HttpClient http, EsportsConfig cfg, AgentIdentit
     /// <summary>Scan + Record, then report only if content hash changed since the last accepted report.</summary>
     public Task<LocalManifest> BuildManifestAsync(CancellationToken ct = default)
     {
-        var (games, dupes) = GameScanner.Scan(GameScanner.EffectiveScanDirs(cfg.ScanDirs, GameScanner.DefaultSteamRoot()));
+        var (games, dupes) = GameScanner.Scan(GameScanner.EffectiveScanDirs(cfg.ScanDirs, GameScanner.SteamScanRoots()));
         return Task.FromResult(new LocalManifest(id.ClientId, id.DevicePin, null, DateTimeOffset.UtcNow,
             AgentInfo.Version, StateModule.Record(), games, dupes.Count > 0 ? dupes : null));
     }

@@ -1043,6 +1043,46 @@ Check(dashHtmlLate.Contains("pushAppUpdate") && dashHtmlLate.Contains("up_to_dat
         "T30f dashboard ships the clickable app-update chip wired to the self_update directive");
 }
 
+// ---- T31: registry-complete app + game discovery ("have the app pull the info from the registry") ----
+{
+    var t31Views = StateModule.UninstallViewNames();
+    Check(t31Views.Length == 4 && t31Views.Contains("HKLM|64") && t31Views.Contains("HKLM|32")
+          && t31Views.Contains("HKCU|64") && t31Views.Contains("HKCU|32"),
+        "T31a inventory spans all four Uninstall views — HKLM|32 is WOW6432Node, where Steam/Battle.net/Epic register; a 64-bit process never sees them in the default view");
+
+    bool t31Exists(string p) => p.Replace('\\', '/').ToLowerInvariant() is var n
+        && (n == "d:/steam/steamapps/common" || n == "e:/steamlib/steamapps/common");
+    var t31Roots = GameScanner.SteamRootsFromRegistryValues("D:\\Steam", new[] { "d:\\steam", "E:\\SteamLib", "  ", "F:\\Nope" }, t31Exists);
+    Check(t31Roots.Count == 2
+          && t31Roots[0].Replace('\\', '/').ToLowerInvariant() == "d:/steam/steamapps/common"
+          && t31Roots[1].Replace('\\', '/').ToLowerInvariant() == "e:/steamlib/steamapps/common",
+        "T31b steam roots derived from registry InstallPath+SteamLibrary values: deduped case-insensitively, dead libraries dropped");
+
+    Environment.SetEnvironmentVariable(GameScanner.FakeSteamRootsEnvVar, "/steam/reg|/games/extra");
+    var t31Dirs = GameScanner.EffectiveScanDirs(new[] { "/x", "/steam/reg/" }, GameScanner.SteamScanRoots());
+    Environment.SetEnvironmentVariable(GameScanner.FakeSteamRootsEnvVar, null);
+    Check(t31Dirs.Count == 3 && t31Dirs[0] == "/x" && t31Dirs[1] == "/steam/reg/",
+        "T31c ESU_FAKE_STEAM_ROOTS seam feeds the agent scan; trailing-slash dedupe, config order preserved");
+
+    Environment.SetEnvironmentVariable(StateModule.FakeInstalledAppsEnvVar,
+        """[{"display_name":"Battle.net","display_version":"1.2.3","hive":"HKLM","view":"32"},{"display_name":"Google Chrome","display_version":"157.0.0.0","hive":"HKCU","view":"64"}]""");
+    var t31Inv = StateModule.InstalledAppsOrFake();
+    var t31St = AppCatalog.Statuses(t31Inv, id => id == "battlenet" ? "1.2.3" : id == "chrome" ? "157.0.0.0" : null, 555);
+    var t31Rec = StateModule.Record()["installedApps"]!.AsArray();
+    Environment.SetEnvironmentVariable(StateModule.FakeInstalledAppsEnvVar, null);
+    var t31Bn = t31St.First(s => s.AppId == "battlenet");
+    var t31Ch = t31St.First(s => s.AppId == "chrome");
+    Check(t31Inv.Count == 2 && t31Bn.Installed && t31Bn.Version == "1.2.3" && t31Bn.UpToDate == true
+          && t31Ch.Installed && !t31St.First(s => s.AppId == "steam").Installed && t31Rec.Count == 2,
+        "T31d fake-inventory seam drives the whole projection: Battle.net installed from an HKLM|32 (WOW6432Node) entry, per-user Chrome from HKCU|64, absent steam stays false");
+
+    var t31Root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    Check(File.ReadAllText(Path.Combine(t31Root, "schemas", "local_manifest.schema.json")).Contains("WOW6432Node")
+          && File.ReadAllText(Path.Combine(t31Root, "README.md")).Contains("WOW6432Node")
+          && File.ReadAllText(Path.Combine(t31Root, "deploy", "BUILD.md")).Contains("WOW6432Node"),
+        "T31e docs+schema name the four registry views and the WOW6432Node trap once, so it is never re-discovered by an operator");
+}
+
 
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");

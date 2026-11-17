@@ -76,6 +76,11 @@ These can't be exercised on Linux and gate a release:
 - Service host self-update (T30): `esportsutil service install` host marks `restart_pending` and
   the replaced EXE loads on the next SCM restart — verify the state chip clears.
 
+- Registry discovery (T31): on a PC where Steam/Battle.net/Epic are installed (they register in the
+  32-bit WOW6432Node view) and/or Chrome is user-scoped, the Settings app tiles must report `installed` (with version where the
+  vendor key has one) and the dashboard Games column must be non-zero for a Steam library the agent
+  finds via the registry. If an app still reads installed:false, check the agent's host: HKCU entries
+  (user installs) need the tray agent in that user's session, not the service.
 - [ ] `esportsutil.exe --role server` → dashboard at `http://<host>:4300/`, toast fires on an alert (AUMID shortcut registered on first run)
 - [ ] `esportsutil.exe --role agent` → PIN onboarding, report visible
 - [ ] `update_game` job with real `steamcmd` — or let the agent bootstrap it: first beat with no

@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using Microsoft.Win32;
 
 namespace EsportsUtil.Core;
@@ -15,7 +16,7 @@ public static class StateModule
     public static JsonObject Record()
     {
         var (vendor, model) = MachineIdentity();
-        var installedApps = OperatingSystem.IsWindows() ? ReadInstalledApps() : new JsonArray();
+        var installedApps = InstalledAppsOrFake();
         return new JsonObject
         {
             ["computerName"] = Environment.MachineName,
@@ -134,16 +135,45 @@ public static class StateModule
         return false;
     }
 
-    /// <summary>Full installed-software inventory: every HKLM/HKCU Uninstall-key entry
-    /// (DisplayName, Publisher, DisplayVersion, InstallLocation, UninstallString, QuietUninstallString).</summary>
+    /// <summary>The installed-software inventory the agent reports. ESU_FAKE_INSTALLED_APPS holds a
+    /// JSON array of installedApps-entry shape and overrides it for tests/demos (same seam style as
+    /// ESU_FAKE_UPDATES); off Windows the real source doesn't exist, so empty unless faked.</summary>
+    public const string FakeInstalledAppsEnvVar = "ESU_FAKE_INSTALLED_APPS";
+    public static JsonArray InstalledAppsOrFake()
+    {
+        var fake = Environment.GetEnvironmentVariable(FakeInstalledAppsEnvVar);
+        if (!string.IsNullOrWhiteSpace(fake))
+        {
+            try { return JsonNode.Parse(fake) as JsonArray ?? new JsonArray(); }
+            catch (JsonException) { }
+        }
+        return OperatingSystem.IsWindows() ? ReadInstalledApps() : new JsonArray();
+    }
+
+    /// <summary>Full installed-software inventory: every Uninstall-key entry across FOUR registry
+    /// views — HKLM 64-bit, HKLM 32-bit (= WOW6432Node, where Steam/Battle.net/Epic register),
+    /// HKCU 64-bit (per-user Chrome etc.), HKCU 32-bit. A 64-bit process reading only the default
+    /// view sees none of the 32-bit registrations — that was the invisible-apps bug (T31).
+    /// (DisplayName, Publisher, DisplayVersion, InstallLocation, UninstallString, QuietUninstallString,
+    /// hive, view.)</summary>
+    static readonly (RegistryHive Hive, RegistryView View, string HiveName, string ViewName)[] UninstallViews =
+    [
+        (RegistryHive.LocalMachine, RegistryView.Registry64, "HKLM", "64"),
+        (RegistryHive.LocalMachine, RegistryView.Registry32, "HKLM", "32"),
+        (RegistryHive.CurrentUser, RegistryView.Registry64, "HKCU", "64"),
+        (RegistryHive.CurrentUser, RegistryView.Registry32, "HKCU", "32"),
+    ];
+    public static string[] UninstallViewNames() => UninstallViews.Select(v => $"{v.HiveName}|{v.ViewName}").ToArray();
+
     [SupportedOSPlatform("windows")]
     private static JsonArray ReadInstalledApps()
     {
         var apps = new JsonArray();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var hive in new[] { Registry.LocalMachine, Registry.CurrentUser })
+        foreach (var (hive, view, hiveName, viewName) in UninstallViews)
         {
-            var root = hive?.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall");
+            using var baseKey = RegistryKey.OpenBaseKey(hive, view);
+            var root = baseKey.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall");
             if (root is null) continue;
             foreach (var name in root.GetSubKeyNames())
             {
@@ -162,6 +192,8 @@ public static class StateModule
                         ["install_location"] = app?.GetValue("InstallLocation") as string,
                         ["uninstall_string"] = app?.GetValue("UninstallString") as string,
                         ["quiet_uninstall_string"] = app?.GetValue("QuietUninstallString") as string,
+                        ["hive"] = hiveName,
+                        ["view"] = viewName,
                     });
                 }
                 catch { }

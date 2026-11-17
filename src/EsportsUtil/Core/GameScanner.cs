@@ -1,3 +1,6 @@
+using System.Runtime.Versioning;
+using Microsoft.Win32;
+
 namespace EsportsUtil.Core;
 
 /// <summary>Folder-structure game discovery (PLAN Phase 1, milestone 1): each immediate
@@ -33,15 +36,85 @@ public static class GameScanner
         return Directory.Exists(root) ? root : "";
     }
 
+    /// <summary>ESU_FAKE_STEAM_ROOTS ('|'-separated paths) forces Steam scan roots on any OS —
+    /// tests/demos, same seam style as ESU_FAKE_UPDATES.</summary>
+    public const string FakeSteamRootsEnvVar = "ESU_FAKE_STEAM_ROOTS";
+
+    /// <summary>Registry InstallPath + SteamLibrary values → the existing "steamapps/common" roots,
+    /// in first-seen order, deduped case-insensitively. Pure (exists-injected) so Steam-on-Windows
+    /// geometry is unit-testable anywhere; a library whose common dir doesn't exist is dropped.</summary>
+    public static List<string> SteamRootsFromRegistryValues(string? installPath, IEnumerable<string> libraryPaths, Func<string, bool> dirExists)
+    {
+        var roots = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in new[] { installPath }.Concat(libraryPaths))
+        {
+            if (string.IsNullOrWhiteSpace(p)) continue;
+            var root = Path.Combine(p, "steamapps", "common");
+            if (dirExists(root) && seen.Add(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)))
+                roots.Add(root);
+        }
+        return roots;
+    }
+
+    /// <summary>Where Steam actually lives, per the Windows registry — the hardcoded default root
+    /// misses every non-default install (T31). HKLM SOFTWARE\Valve\Steam InstallPath (32-bit view
+    /// first: that's where a 64-bit process finds Steam) plus this user's HKCU SOFTWARE\Valve\Steam
+    /// SteamLibrary* values (extra libraries from the Steam settings).</summary>
+    [SupportedOSPlatform("windows")]
+    public static List<string> SteamRootsFromRegistry()
+    {
+        string? installPath = null;
+        foreach (var view in new[] { RegistryView.Registry32, RegistryView.Registry64 })
+        {
+            if (installPath is not null) break;
+            try
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
+                using var key = baseKey.OpenSubKey(@"SOFTWARE\Valve\Steam");
+                installPath = key?.GetValue("InstallPath") as string;
+            }
+            catch (Exception) { }
+        }
+        var libs = new List<string>();
+        try
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64);
+            using var key = baseKey.OpenSubKey(@"SOFTWARE\Valve\Steam");
+            if (key is not null)
+                foreach (var v in key.GetValueNames())
+                    if (v.StartsWith("SteamLibrary", StringComparison.OrdinalIgnoreCase) && key.GetValue(v) is string s)
+                        libs.Add(s);
+        }
+        catch (Exception) { }
+        return SteamRootsFromRegistryValues(installPath, libs, Directory.Exists);
+    }
+
+    /// <summary>Steam roots the agent scans: fake seam when set, else registry roots + the classic
+    /// default (both when the registry knows nothing). Downstream dedupe via EffectiveScanDirs.</summary>
+    public static IEnumerable<string> SteamScanRoots()
+    {
+        var fake = Environment.GetEnvironmentVariable(FakeSteamRootsEnvVar);
+        if (!string.IsNullOrWhiteSpace(fake))
+            return fake.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var roots = OperatingSystem.IsWindows() ? SteamRootsFromRegistry() : new List<string>();
+        var def = DefaultSteamRoot();
+        if (def.Length > 0) roots.Add(def);
+        return roots;
+    }
+
     /// <summary>Configured roots plus the default Steam root (operator request: Steam games
     /// installed under the default library must be visible without extra config). Case-insensitive
     /// dedupe on trailing-separator-normalized paths; configured order preserved; empty entries
     /// dropped. Pure so the merge is unit-testable on any OS.</summary>
     public static List<string> EffectiveScanDirs(IEnumerable<string> configured, string steamRoot)
+        => EffectiveScanDirs(configured, new[] { steamRoot });
+
+    public static List<string> EffectiveScanDirs(IEnumerable<string> configured, IEnumerable<string> steamRoots)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var list = new List<string>();
-        foreach (var d in configured.Append(steamRoot))
+        foreach (var d in configured.Concat(steamRoots))
         {
             if (string.IsNullOrWhiteSpace(d)) continue;
             var key = d.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

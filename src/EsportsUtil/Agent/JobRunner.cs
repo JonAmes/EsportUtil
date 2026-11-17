@@ -93,7 +93,7 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
     private (bool, string) CleanupDuplicate(Job job)
     {
         var keep = job.Path ?? throw new InvalidOperationException("missing keep-path");
-        var roots = GameScanner.EffectiveScanDirs(cfg.ScanDirs, GameScanner.DefaultSteamRoot());
+        var roots = GameScanner.EffectiveScanDirs(cfg.ScanDirs, GameScanner.SteamScanRoots());
         var scan = GameScanner.Scan(roots);                    // fresh truth, not the server's stale copy list
         var current = scan.Reports.Where(g => g.GameId == job.Subject).Select(g => g.InstallPath).ToList();
         var doomed = DuplicateCleanupPlan(current, keep);

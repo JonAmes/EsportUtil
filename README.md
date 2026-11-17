@@ -21,6 +21,12 @@ agent resource gate). Windows-box runtime gates remain — see `deploy/BUILD.md`
 - **PIN onboarding:** a new agent reports a 4-digit PIN; the operator names it in the dashboard.
 - **Downed state:** per-PC toggle; the agent converges the desktop wallpaper to a Content
   Library "out of service" image (baseline restored when cleared).
+- **Installed apps & games come from the Windows registry:** the software inventory walks the
+  Uninstall key in all four views — HKLM 64-bit, HKLM 32-bit (= WOW6432Node, where Steam, Battle.net
+  and Epic register; a 64-bit process never sees those in the default view), HKCU 64-bit and HKCU
+  32-bit — tagging every entry with its hive+view. Steam library roots (and their installed games)
+  come from `SOFTWARE\Valve\Steam`: `InstallPath` plus the user's `SteamLibrary*` values, so a
+  non-default Steam install location no longer means zero visible games.
 - **Alerting:** in-process queue drained by a hosted service → Windows toast on the server box
   (console on dev), fired only on state change.
 - **Resource budget (hard gate):** idle agent <1% CPU avg, <60 MB working set — asserted by the

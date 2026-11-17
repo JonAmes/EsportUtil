@@ -36,7 +36,7 @@ fi
   -p:TrimMode=partial \
   -p:DebugType=none -p:DebugSymbols=false \
   -p:InvariantGlobalization=true \
-  -p:Version="${VER:-0.5.0}" \
+  -p:Version="${VER:-0.5.1}" \
   -o "$OUT"
 
 echo
