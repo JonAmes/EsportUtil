@@ -94,6 +94,8 @@ agCfg.HeartbeatIntervalSec = 1; agCfg.SlowScanIntervalMin = 0;
 agCfg.ScanDirs = new List<string> { rootA, rootB };
 using var cts = new CancellationTokenSource();
 var loop = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(5) }, agCfg);
+var overlayReqs = new List<LocateOverlayRequest>();          // probe instead of spawning real overlay children
+loop.OverlaySurface = r => overlayReqs.Add(r);
 var loopTask = loop.RunAsync(cts.Token);
 
 Check(await Until(async () => (await State()).devices.Any(d => d.games >= 2 && d.duplicates == 1)),
@@ -106,6 +108,10 @@ Check(await Until(async () => loop.LastDesiredState == "downed"), "T8d agent rec
 
 await probe.PostAsync("/api/locate/" + cid, new StringContent(""));
 Check(await Until(async () => loop.ConsumedDirectives.Any(d => d.Type == "locate"), 6), "T8e locate directive delivered once via ack");
+Check(await Until(() => Task.FromResult(overlayReqs.Count == 1
+        && overlayReqs[0].ExpiresUnix > DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        && overlayReqs[0].DisplayName == "LAN-PC-TEST"), 6),
+    "T8e2 locate button triggers the overlay surface exactly once, live expiry, operator display_name in payload");
 
 // hash dedupe: identical report content -> no repeated uploads despite report timer every heartbeat
 await Task.Delay(3500); // 3+ heartbeat/report cycles with unchanged content
@@ -324,6 +330,29 @@ await PostAck4("/api/downed", new DownedRequest(cid4, "active", null, null));
 Check(await Until(() => Task.FromResult(Wallpaper.Read(agentDir4)?.ContentId is null), 15),
     "T14h returning to active restores the baseline wallpaper on the agent");
 cts4.Cancel(); await loopTask4; await app4.StopAsync();
+
+// ---------- T15: Phase 4 locate overlay pipeline units (payload → request → argv → render model) ----------
+var nowT15 = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+var ovReq = new LocateOverlayRequest("LAN-PC-07", "0042", "11111111-2222-3333-4444-555555555555", nowT15 + 30, "Precision 7920 Tower");
+var ovArgs = LocateOverlayRequest.BuildArgs(ovReq);
+Check(ovArgs[0] == LocateOverlayRequest.Flag && ovArgs.Contains("--display-name") && ovArgs.Contains("LAN-PC-07")
+    && ovArgs[ovArgs.IndexOf("--expires") + 1] == (nowT15 + 30).ToString(),
+    "T15a overlay child argv is flag + typed switches (ArgumentList-safe for names with spaces)");
+Check(LocateOverlayRequest.TryParse(ovArgs, out var ovBack) && ovBack == ovReq, "T15b argv round-trip parse");
+Check(ovBack.ShouldShow(nowT15) && !(ovBack with { ExpiresUnix = nowT15 - 5 }).ShouldShow(nowT15)
+    && !LocateOverlayRequest.TryParse([LocateOverlayRequest.Flag, "--pin", "1"], out _),
+    "T15c stale overlay suppressed; malformed argv rejected (exit before render)");
+Check(ovReq.QrPayload() == $"ESU:{ovReq.ClientId}:{ovReq.DevicePin}"
+    && ovReq.QrPayload() == FileLabelPrinter.QrPayload(ovReq.ClientId, ovReq.DevicePin),
+    "T15d overlay QR payload identical to printed label — one scan protocol covers both");
+var qr15 = Qr.Modules(ovReq.QrPayload());
+Check(qr15.Length >= 29 && qr15.All(r => r.Length == qr15.Length) && qr15[4][4] && qr15[4][qr15.Length - 5],
+    "T15e real QR matrix with 4-module quiet zone; finder modules set at (4,4) and top-right");
+Check(ConsoleOverlay.RenderCard(ovReq, nowT15) is var card && card.Contains("LAN-PC-07")
+    && card.Contains("auto-dismiss in 30s") && card.Contains("ESU:11111111"),
+    "T15f console fallback carries name, PIN meta, countdown and scan payload");
+Check(OverlayLauncher.RequestFor(new Directive("locate", null, nowT15 + 30), new AgentIdentity("abc", "0042"), null).DisplayName == "PIN 0042",
+    "T15g unnamed device falls back to PIN label (never blank overlay title)");
 
 // ---------- T11: resource budget gate (PLAN.md) — standalone agent, idle ----------
 var perfSecs = int.TryParse(Environment.GetEnvironmentVariable("PERF_SECS"), out var ps) ? ps : 20;

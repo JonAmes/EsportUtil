@@ -99,6 +99,8 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
     public string LastDesiredState { get; private set; } = "active";
     public List<Directive> ConsumedDirectives { get; } = new();
     public int ReportsSent { get; private set; }
+    /// <summary>Locate overlay surface. Default spawns the same-EXE overlay child; tests inject a probe.</summary>
+    public Action<LocateOverlayRequest> OverlaySurface { get; set; } = req => OverlayLauncher.Launch(req);
     private string? _lastHash;
     private string? _downedContentApplied;          // content_id of the downed wallpaper currently applied
     private DateTime _reportNow = DateTime.MinValue;
@@ -112,12 +114,16 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
 
         var registered = false;
         var nextReport = DateTime.MinValue;
+        string? model = null;
         while (!ct.IsCancellationRequested)
         {
             try
             {
                 if (!registered)
-                    registered = await client.RegisterAsync(StateModule.Record()["machineModel"]?.GetValue<string>(), ct);
+                {
+                    model = StateModule.Record()["machineModel"]?.GetValue<string>();
+                    registered = await client.RegisterAsync(model, ct);
+                }
 
                 if (registered)
                 {
@@ -134,7 +140,21 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                         {
                             ConsumedDirectives.AddRange(ack.Directives);
                             foreach (var d in ack.Directives)
-                                Console.WriteLine($"directive '{d.Type}' received (expires {d.ExpiresUnix}) — overlay renders in the user session");
+                                if (d.Type == "locate")
+                                {
+                                    // Phase 4 locate overlay: transient render in the user session,
+                                    // suppressed client-side too if the directive already expired.
+                                    var req = OverlayLauncher.RequestFor(d, id, model);
+                                    if (req.ShouldShow(DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
+                                    {
+                                        OverlaySurface(req);
+                                        Console.WriteLine($"locate directive → overlay spawned (dismiss by {req.ExpiresUnix})");
+                                    }
+                                    else
+                                        Console.WriteLine($"locate directive expired in transit — overlay suppressed");
+                                }
+                                else
+                                    Console.WriteLine($"directive '{d.Type}' received (expires {d.ExpiresUnix})");
                         }
                         if (ack.Job is { } job)
                         {

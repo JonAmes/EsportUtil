@@ -122,7 +122,7 @@ public static class ServerRole
                 : Results.Json(new AckEnvelope(false, "unknown device or invalid state"), Wire.Options, statusCode: 400));
 
         app.MapPost("/api/locate/{clientId}", (string clientId) =>
-            registry.QueueDirective(clientId, new Directive("locate", null,
+            registry.QueueDirective(clientId, new Directive("locate", registry.DisplayNameOf(clientId),
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds() + cfg.LocateTtlSec))
                 ? Results.Json(new AckEnvelope(true), Wire.Options)
                 : Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404));

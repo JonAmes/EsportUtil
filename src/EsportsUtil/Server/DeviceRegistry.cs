@@ -105,6 +105,13 @@ public sealed class DeviceRegistry
         }
     }
 
+    /// <summary>Current operator name ("" before rename) — locate directives carry it as payload so the
+    /// overlay shows the human label without the agent having to ask.</summary>
+    public string? DisplayNameOf(string clientId)
+    {
+        lock (_gate) return _devices.TryGetValue(clientId, out var e) ? e.DisplayName : null;
+    }
+
     /// <summary>Stamp a transient one-shot directive (e.g. locate). Not persisted; expires if undelivered.</summary>
     public bool QueueDirective(string clientId, Directive directive)
     {

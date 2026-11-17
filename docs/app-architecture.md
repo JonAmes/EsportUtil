@@ -61,7 +61,7 @@ shell over the Agent role; the service reports even when the window is closed.
 | Content Library storage + /content endpoint | Server role | agent (agent only caches) |
 | desired_state storage + downed-wallpaper selection (registry) | Server role | agent (agent only reconciles) |
 | Downed wallpaper apply/restore (user-session wallpaper swap) | Core.StateModule wallpaper path | server decision logic, dashboard |
-| Locate overlay render (user-session, TTL self-dismiss) | agent UI surface (--tray / --overlay) | server stamps directive, dashboard button |
+| Locate overlay render (user-session, TTL self-dismiss) | agent: `--overlay` same-EXE child (WinForms fullscreen on Windows, console card fallback elsewhere) | server stamps directive + display_name, dashboard button |
 | Content fetch/cache/verify (sha256) + deploy_content handler | Core.StateModule / agent job runner | server decision logic |
 | Software install (winget, Init only) | Core.StateModule | server |
 | Baseline model-matching | Core.StateModule selection, driven by server data | dashboard |
