@@ -41,6 +41,8 @@ tr.downed td:last-child,tr.downed td.swcell{opacity:1}
 .alert b{font-weight:600}.alert.crit b{color:var(--crit)}.alert.info b{color:var(--ok)}
 .foot{margin-top:18px;color:var(--mut);font-size:12px}
 th{white-space:nowrap}
+.chip{display:inline-block;font-size:11.5px;padding:1px 7px;margin:1px 3px 1px 0;border:1px solid var(--bdr);border-radius:9px;white-space:nowrap;max-width:170px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.chip.up{color:var(--accent)} .chip.rb,.chip.un{color:var(--crit)} .chip.mi,.chip.ung{color:var(--mut)} .chip.ok{color:var(--ok)}
 .dup{color:var(--warn);font-size:11.5px}
 </style>
 </head>
@@ -58,10 +60,10 @@ th{white-space:nowrap}
 
   <table>
     <thead><tr>
-      <th>Device</th><th>PIN</th><th>Model</th><th>Games</th><th>Check-in</th>
+      <th>Device</th><th>PIN</th><th>Model</th><th>Games</th><th>Compliance</th><th>Check-in</th>
       <th>State</th><th>Downed</th><th>Actions</th>
     </tr></thead>
-    <tbody id="rows"><tr><td colspan="8" style="color:var(--mut)">connecting to server…</td></tr></tbody>
+    <tbody id="rows"><tr><td colspan="9" style="color:var(--mut)">connecting to server…</td></tr></tbody>
   </table>
 
   <div class="alerts"><div class="k" style="color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Recent alerts</div><div id="alerts"></div></div>
@@ -90,7 +92,7 @@ function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c=>({'&':'&amp;','<':
 async function refresh(){
   let d;
   try { d = await (await fetch('/api/state')).json(); }
-  catch { document.getElementById('rows').innerHTML = '<tr><td colspan="8" style="color:var(--crit)">server unreachable</td></tr>'; return; }
+  catch { document.getElementById('rows').innerHTML = '<tr><td colspan="9" style="color:var(--crit)">server unreachable</td></tr>'; return; }
   document.getElementById('clock').textContent = new Date(d.server_time).toLocaleTimeString();
   document.getElementById('c-agents').textContent = d.agents_reporting + ' / ' + d.agents_total;
   document.getElementById('c-manifest').textContent = d.manifest_version;
@@ -102,11 +104,18 @@ async function refresh(){
     const ago = dev.last_heartbeat_sec_ago === null ? 'never' : Math.round(dev.last_heartbeat_sec_ago) + 's ago';
     const dn = dev.desired_state === 'downed';
     const dupNote = dev.duplicates ? `<div class="dup">${dev.duplicates} duplicate game id(s) awaiting server resolution</div>` : '';
+    const kindCls = {update_required:'up', rollback_required:'rb', missing_from_machine:'mi', unmanaged_game:'ung', unapproved_app:'un', duplicate_resolved:'up'};
+    const kindLbl = {update_required:'↑', rollback_required:'↓', missing_from_machine:'＋', unmanaged_game:'?', unapproved_app:'⚠', duplicate_resolved:'dup'};
+    const issues = dev.issues || [];
+    const chips = issues.length
+      ? issues.map(i => `<span class="chip ${kindCls[i.kind]||'ung'}" title="${esc(i.kind)}: ${esc(i.subject)}${i.reported_version?` (now ${i.reported_version}, want ${i.wanted_version})`:i.wanted_version?` (want ${i.wanted_version})`:''}${i.keep_path?` — keep ${i.keep_path}`:''}${i.protected?' [protected]':''}">${kindLbl[i.kind]||i.kind}${i.kind==='unapproved_app'&&i.protected?'🔒':''} ${esc(i.subject)}</span>`).join('')
+      : (dev.games ? '<span class="chip ok">✓</span>' : '<span style="color:var(--mut)">—</span>');
     return `<tr class="${dn?'downed':''}">
       <td><a href="#" style="color:inherit;text-decoration:none" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`});return false">${esc(dev.display_name)}${dev.pending?' <span class="pin">(awaiting name)</span>':''}</a>${dupNote}</td>
       <td class="pin">${esc(dev.device_pin)}</td>
       <td>${esc(dev.machine_model ?? '—')}</td>
       <td>${dev.games ?? '—'}</td>
+      <td>${chips}</td>
       <td>${ago}</td>
       <td>
         <span class="pill ${dn?'':'ok'}" ${dn?'hidden':''}>active</span>
@@ -118,7 +127,7 @@ async function refresh(){
         <button class="btn" onclick="printLabel('${dev.client_id}')">label</button>
       </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="8" style="color:var(--mut)">no agents registered yet — onboard a PC with its PIN</td></tr>';
+  }).join('') || '<tr><td colspan="9" style="color:var(--mut)">no agents registered yet — onboard a PC with its PIN</td></tr>';
 
   document.getElementById('alerts').innerHTML = d.alerts.slice(0,8).map(a =>
     `<div class="alert ${a.severity}"><b>${esc(a.type)}</b> · ${esc(a.client_id)} · ${esc(a.message)} · ${new Date(a.timestamp).toLocaleTimeString()}</div>`

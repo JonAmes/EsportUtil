@@ -18,7 +18,17 @@ public sealed class ManifestStore
     }
 
     private string ManifestPath => Path.Combine(_dataDir, "MasterManifest.json");
+    private string PolicyPath => Path.Combine(_dataDir, "ApprovedSoftwarePolicy.json");
     public string ReportsDir => Path.Combine(_dataDir, "reports");
+
+    /// <summary>Approved Software Policy — operator-maintained; absent = report-only evaluation disabled.</summary>
+    public ApprovedSoftwarePolicy? LoadPolicy()
+    {
+        lock (_gate)
+            return File.Exists(PolicyPath)
+                ? Wire.FromJson<ApprovedSoftwarePolicy>(File.ReadAllText(PolicyPath))
+                : null;
+    }
 
     public MasterManifest LoadMaster()
     {

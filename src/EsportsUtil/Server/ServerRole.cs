@@ -39,6 +39,7 @@ public static class ServerRole
         var content = new ContentLibrary(cfg.DataDir);
         var hub = new AlertHub();
         var printer = new FileLabelPrinter(Path.Combine(cfg.DataDir, "labels"));
+        var issueHashes = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
 
         builder.Services.AddHostedService(_ => new LivenessMonitor(registry, hub, cfg.HeartbeatTimeoutSec));
         builder.Services.AddSingleton(hub);
@@ -123,10 +124,25 @@ public static class ServerRole
         app.MapGet("/api/state", () =>
         {
             var now = DateTimeOffset.UtcNow;
+            var master = manifests.LoadMaster();
+            var policy = manifests.LoadPolicy();
+
+            List<LocalManifest> LoadReports()
+            {
+                var list = new List<LocalManifest>();
+                foreach (var f in Directory.GetFiles(manifests.ReportsDir, "*.json"))
+                    if (Wire.FromJson<LocalManifest>(File.ReadAllText(f)) is { } lm) list.Add(lm);
+                return list;
+            }
+            var issuesByClient = LoadReports()
+                .ToDictionary(r => r.ClientId,
+                    r => Comparator.Games(r, master).Concat(Comparator.Software(r, policy)).ToList());
+
             var devices = registry.Snapshot().OrderBy(e => e.DevicePin).Select(e =>
             {
                 manifests.Summaries.TryGetValue(e.ClientId, out var sum);
                 var hbAgo = e.LastHeartbeat is null ? (double?)null : (now - e.LastHeartbeat.Value).TotalSeconds;
+                var issues = issuesByClient.TryGetValue(e.ClientId, out var iss) ? iss : new List<Issue>();
                 return new
                 {
                     client_id = e.ClientId,
@@ -144,14 +160,28 @@ public static class ServerRole
                     agent_version = sum?.AgentVersion,
                     last_report = sum?.ReportTimestamp,
                     locate_pending = e.PendingDirectives.Any(d => d.ExpiresUnix > now.ToUnixTimeSeconds()),
+                    issues,
                 };
             }).ToList();
-            var master = manifests.LoadMaster();
+
+            // Compliance alerting: publish once per device whenever its issue set changes.
+            foreach (var (cid, issues) in issuesByClient)
+            {
+                var h = Comparator.Hash(issues);
+                if (issueHashes.TryGetValue(cid, out var old) && old == h) continue;
+                issueHashes[cid] = h;
+                if (issues.Count == 0) continue;
+                var pin = registry.Snapshot().FirstOrDefault(x => x.ClientId == cid)?.DevicePin;
+                _ = hub.PublishAsync(new Alert("compliance", "warn",
+                    string.Join(", ", issues.GroupBy(i => i.Kind).Select(g => $"{g.Key}×{g.Count()}")), cid, pin, now));
+            }
+
             return Results.Json(new
             {
                 server_time = now,
                 manifest_version = master.Version,
                 factory_entries = master.FactoryStateMap.Count,
+                policy_active = policy is not null,
                 agents_reporting = devices.Count(d => d.online),
                 agents_total = devices.Count(),
                 devices,

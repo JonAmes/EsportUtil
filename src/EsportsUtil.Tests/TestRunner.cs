@@ -116,7 +116,77 @@ Check(await Until(async () => (await State()).alerts.Any(a => a.type == "heartbe
     "T8g heartbeat-lost critical alert after timeout");
 await app.StopAsync();
 
-// ---------- T9: resource budget gate (PLAN.md) — standalone agent, idle ----------
+// ---------- T9: Phase 2 comparator unit checks ----------
+Check(Versions.Cmp("1.9", "1.10") < 0 && Versions.Cmp("7.10", "7.9") > 0 && Versions.Cmp("2.1.0.3", "2.1.0.3") == 0
+    && Versions.Cmp("2.1.0.3", "unknown") > 0, "T9a version ordering 1.9 < 1.10; junk versions rank last");
+var rep = new LocalManifest("cx", "0001", null, DateTimeOffset.UnixEpoch, "0.1.0",
+    new System.Text.Json.Nodes.JsonObject
+    {
+        ["machineModel"] = "Model X",
+        ["installedApps"] = new System.Text.Json.Nodes.JsonArray
+        {
+            new System.Text.Json.Nodes.JsonObject { ["display_name"] = "Steam" },
+            new System.Text.Json.Nodes.JsonObject { ["display_name"] = "Microsoft Visual C++ 2019" },
+            new System.Text.Json.Nodes.JsonObject { ["display_name"] = "Chrome" },
+            new System.Text.Json.Nodes.JsonObject { ["display_name"] = "EsportsUtil Agent" },
+        },
+    },
+    new List<GameReport>
+    {
+        new("a", "A", "/a", "1.0.1", "steam", "OK"),
+        new("b", "B", "/b", "2.0", "steam", "OK"),
+        new("c", "C", "/c", "1.0", "steam", "OK"),
+        new("e", "E", "/e1", "1", "steam", "DUPLICATE_FOUND"),
+        new("e", "E", "/e2", "2", "steam", "DUPLICATE_FOUND"),
+    },
+    new List<DuplicateReport> { new("e", new List<string> { "/e1", "/e2" }) });
+var mm = new MasterManifest(1, DateTimeOffset.UnixEpoch,
+    new List<MasterGame> { new("a", "1.0.5"), new("b", "1.0"), new("d", "3.0"), new("e", "2") }, new());
+var giss = Comparator.Games(rep, mm);
+Check(giss.Any(i => i.Kind == "update_required" && i.Subject == "a" && i.WantedVersion == "1.0.5"), "T9b update_required from master diff");
+Check(giss.Any(i => i.Kind == "rollback_required" && i.Subject == "b"), "T9c rollback_required");
+Check(giss.Any(i => i.Kind == "unmanaged_game" && i.Subject == "c"), "T9d unmanaged_game");
+Check(giss.Any(i => i.Kind == "missing_from_machine" && i.Subject == "d"), "T9e missing_from_machine (master game absent)");
+Check(giss.Any(i => i.Kind == "duplicate_resolved" && i.Subject == "e" && i.KeepPath == "/e2"),
+    "T9f duplicate resolution keeps the master-matching copy");
+var pol = new ApprovedSoftwarePolicy(1, DateTimeOffset.UnixEpoch, "report_only",
+    new List<SoftwareRule> { new("Steam"), new("*", NamePrefix: "Microsoft Visual C++ 20") },
+    new List<SoftwareRule> { new("EsportsUtil Agent") });
+var sugg = Comparator.Software(rep, pol);
+Check(sugg.Count(i => i.Kind == "unapproved_app") == 2, "T9g allow-list flags only unmatched apps (Steam + VC++ redist pass)");
+Check(sugg.Any(i => i.Subject == "EsportsUtil Agent" && i.Protected), "T9h protected list flagged with removal-veto marker");
+Check(Comparator.Software(rep, null).Count == 0, "T9i absent policy = evaluation disabled");
+Check(Comparator.Hash(giss) == Comparator.Hash(giss.AsEnumerable().Reverse()), "T9j issue-set hash stable under reordering");
+
+// ---------- T10: Phase 2 E2E — /api/state issues + compliance alert ----------
+var port2 = 4398; var srvUrl2 = $"http://127.0.0.1:{port2}"; var srvDir2 = Path.Combine(tmp, "srv2");
+Directory.CreateDirectory(srvDir2);
+File.WriteAllText(Path.Combine(srvDir2, "MasterManifest.json"), Wire.ToJson(new MasterManifest(1, DateTimeOffset.UtcNow,
+    new List<MasterGame> { new("dota_2", "7.11"), new("counter_strike_2", "2.1.0.3"), new("fortnite", "1.0") }, new())));
+File.WriteAllText(Path.Combine(srvDir2, "ApprovedSoftwarePolicy.json"), Wire.ToJson(
+    new ApprovedSoftwarePolicy(1, DateTimeOffset.UtcNow, "report_only", new List<SoftwareRule>(), new List<SoftwareRule>())));
+var srvCfg2 = new EsportsConfig { Role = "server", ServerUrl = srvUrl2, DataDir = srvDir2 }; srvCfg2.HeartbeatTimeoutSec = 30;
+using var app2 = ServerRole.BuildApp(srvCfg2); await app2.StartAsync();
+using var probe2 = new HttpClient { BaseAddress = new Uri(srvUrl2), Timeout = TimeSpan.FromSeconds(5) };
+var agCfg2 = new EsportsConfig { Role = "agent", ServerUrl = srvUrl2, DataDir = Path.Combine(tmp, "agent2") };
+agCfg2.HeartbeatIntervalSec = 1; agCfg2.SlowScanIntervalMin = 0; agCfg2.ScanDirs = new List<string> { rootA, rootB };
+using var cts2 = new CancellationTokenSource();
+var loop2 = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(5) }, agCfg2);
+var loopTask2 = loop2.RunAsync(cts2.Token);
+Check(await Until(async () =>
+{
+    var dev = (Wire.FromJson<JsonDoc>(await probe2.GetStringAsync("/api/state"))!).devices.FirstOrDefault();
+    return dev is { issues.Count: > 0 }
+        && dev.issues.Any(i => i.kind == "update_required" && i.subject == "dota_2")
+        && dev.issues.Any(i => i.kind == "duplicate_resolved" && i.subject == "counter_strike_2")
+        && dev.issues.Any(i => i.kind == "missing_from_machine" && i.subject == "fortnite");
+}, 20), "T10a /api/state carries update_required + duplicate_resolved + missing_from_machine");
+Check(await Until(async () => (Wire.FromJson<JsonDoc>(await probe2.GetStringAsync("/api/state"))!).alerts
+    .Any(a => a.type == "compliance" && a.severity == "warn"), 10),
+    "T10b compliance warn alert fires once when the issue set appears");
+cts2.Cancel(); await loopTask2; await app2.StopAsync();
+
+// ---------- T11: resource budget gate (PLAN.md) — standalone agent, idle ----------
 var perfSecs = int.TryParse(Environment.GetEnvironmentVariable("PERF_SECS"), out var ps) ? ps : 20;
 var agentBin = Path.Combine(AppContext.BaseDirectory, "esportsutil.dll");
 if (File.Exists(agentBin))
@@ -138,11 +208,11 @@ if (File.Exists(agentBin))
     var peakMb = ProcPeakRssMb(p.Id);
     p.Kill(entireProcessTree: true);
     Console.WriteLine($"      measured: cpu={cpuPct:F2}% over {perfSecs}s idle, peak RSS={peakMb:F1}MB");
-    Check(cpuPct < 1.0, "T9a agent idle CPU < 1% (budget)");
-    Check(peakMb < 60, "T9b agent working set < 60 MB (budget)");
+    Check(cpuPct < 1.0, "T11a agent idle CPU < 1% (budget)");
+    Check(peakMb < 60, "T11b agent working set < 60 MB (budget)");
     await papp.StopAsync();
 }
-else Check(false, "T9 esportsutil.dll not found next to tests — cannot measure budget");
+else Check(false, "T11 esportsutil.dll not found next to tests — cannot measure budget");
 
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
@@ -162,5 +232,6 @@ static double ProcPeakRssMb(int pid)
 
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
-file sealed record Dev(string client_id, int? games, int? duplicates);
+file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues);
+file sealed record IssueDoc(string kind, string subject);
 file sealed record AlertDoc(string type, string severity);

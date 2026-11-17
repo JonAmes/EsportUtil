@@ -72,7 +72,7 @@ The project will proceed through the following phases:
 *   **Locate Overlay (`locate` directive):** the dashboard has a per-PC **locate** button; the server stamps a one-shot `locate` directive with an expiry (default 30 s, configurable) into that machine's next heartbeat ack. The agent renders a **full-screen, topmost overlay in the user session** via the same-EXE UI process (the `--tray` stub, or a `--overlay` mode launched into the active session): giant `display_name`, station metadata line, a **QR encoding the DevicePin** — the same payload as the printed label, so the operator can scan and confirm identity at the desk — pulsing accent border, and a visible auto-dismiss countdown. Closes on expiry, click, or ESC; the expiry also means a late ack can never pop a stale overlay, and an agent that's down simply never shows one (which is itself information). Transient and self-dismissing, so zero steady-state cost against the resource budget.
 
 ## ⏳ Current Status
-Status: **Phase 1 implemented and test-passing** (C# single EXE, `src/EsportsUtil`). Done & verified on the dev box:
+Status: **Phase 2 implemented and test-passing** (on top of Phase 1, `src/EsportsUtil`). Done & verified on the dev box:
 * Contracts (`Core/Contracts.cs`) mirror the JSON schemas field-for-field; wire JSON is snake_case; `ReportHash` content-hash dedupe (timestamps normalized out) means unchanged state costs ~zero bandwidth/disk.
 * GameScanner: folder-structure discovery, folder→`game_id` normalization, launcher root detection, version probes, cross-root duplicate detection reported as `duplicates` + `DUPLICATE_FOUND` statuses.
 * StateModule **Record** port (identity incl. model, software inventory, startup, wallpaper/screensaver — Windows registry paths compile, Windows-runtime exercise pending); `machine_state` reported verbatim as opaque object.
@@ -80,8 +80,16 @@ Status: **Phase 1 implemented and test-passing** (C# single EXE, `src/EsportsUti
 * Heartbeat + liveness monitor: `heartbeat_lost` critical alert then `heartbeat_recovered` after timeout; alerts via in-process `System.Threading.Channels` hub surfaced on the live dashboard.
 * Content Library: manifest + `GET /content/{id}` + sha256-verified fetch verified end-to-end; label print endpoint with file-artifact fallback verified.
 * **Live server dashboard** served by the EXE (`wwwroot/dashboard.html`): fleet table with per-PC rename, downed switch, locate and label actions; polls `/api/state` every 3 s.
-* **Resource gate (PLAN acceptance):** automated perf assertion in `src/EsportsUtil.Tests` (dependency-free runner, 31 checks) measures a standalone idle agent: measured `cpu=0.00% / 20 s, peak RSS 55.0 MB` → both budgets pass (nightly runs `PERF_SECS=300` for the 5-min window).
+* **Resource gate (PLAN acceptance):** automated perf assertion in `src/EsportsUtil.Tests` (dependency-free runner, 46 checks) measures a standalone idle agent: measured `cpu=0.00% / 20 s, peak RSS 55.2 MB` → both budgets pass (nightly runs `PERF_SECS=300` for the 5-min window).
+* **Phase 2 — comparison engine** (`Server/Comparator.cs`, pure functions; server diffs each stored report on demand):
+    * Master Manifest diff with dotted-numeric version ordering (`1.9 < 1.10`; junk versions like `unknown` always rank last): `update_required`, `rollback_required`, `unmanaged_game`, `missing_from_machine`.
+    * Factory State Map consulted for `missing_from_machine` remediation target: when the device's `machineModel` matches a factory entry, the wanted version is the factory baseline, not the master latest.
+    * Duplicate resolution server-side: the report carries the duplicate copies, the server chooses which to keep (master-version match wins, else highest version) and emits `duplicate_resolved` with the keep-path — data for the Phase 4 cleanup job, never executed now.
+    * Approved Software Policy (`ApprovedSoftwarePolicy.json`, mirrors `schemas/approved_software.schema.json`): allow-list evaluation, **report-only** — unmatched apps become `unapproved_app` issues, `protected` entries flagged with a removal-veto marker; absent policy file = evaluation disabled (no alert spam before the operator curates the list).
+    * `/api/state` now carries per-device `issues[]`; the live dashboard renders them as a **Compliance column** (↑ update, ↓ rollback, ＋ missing, ? unmanaged, dup, ⚠ unapproved with 🔒 when protected; ✓ when clean; tooltips carry versions/paths).
+    * Alert-on-change compliance: a `compliance` warn alert publishes only when a device's issue-set hash changes, not on every poll.
+    * Verified live (durable server, LAN-PC-07): empty master → `unmanaged_game` + `duplicate_resolved` (keeping `2.1.0.3`) surfaced as dashboard chips and a `compliance` alert in the live feed; `update_required` / `missing_from_machine` verified by the seeded-master E2E (T10).
 
 Remaining Phase 1 residuals (Windows-box gates, not Linux-verifiable here): StateModule registry/WMI reads at real runtime, `System.Drawing.Printing` label path vs the file fallback.
 
-Next phase: **Phase 2 — Master Manifest & Comparison Logic** (diff vs `MasterManifest.json`, approved-software report-only evaluation).
+Next phase: **Phase 3 — Asynchronous Alerting & Notification** (drain the in-process queue into Windows toast on the server box; Linux dev box keeps the console/dashboard surface).
