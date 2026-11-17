@@ -2,7 +2,9 @@
 
 EsportsUtil is **one native Windows binary: `esportsutil.exe`, C# / .NET 8,
 self-contained, single-file**. Role comes from `esportsutil.config.json`
-(or `--role server|agent`). No PowerShell and no Python are deployed anywhere.
+(or `--role server|agent`). On first run with no config, the app asks once (Server or Agent
+dialog) and writes the config next to the exe — the role is still never guessed.
+No PowerShell and no Python are deployed anywhere.
 
 The server and agent halves share a `Core` library, so the State Module, the JSON
 contracts, and the game scanner exist **exactly once** in the build — the halves
