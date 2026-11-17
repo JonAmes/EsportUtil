@@ -49,7 +49,17 @@ PERF_SECS=300 dotnet run --project src/EsportsUtil.Tests     # nightly 5-min idl
    (data dirs `C:\ProgramData\EsportsUtil\{server,agent}`).
 3. First run manually: `esportsutil.exe --role agent` — it prints the 4-digit PIN;
    name the device in the dashboard.
-4. Service install/upgrade is a planned ops tail (not yet in this build).
+4. Then pick the lifecycle mode:
+   - **Game PCs (recommended): system tray.** `esportsutil.exe --tray` runs the full agent
+     with a status dot in the tray (green linked / amber pairing or downed / red server
+     unreachable); double-click opens the client dashboard, right-click has identity+PIN and Exit.
+     `esportsutil.exe autostart enable` adds it to the user's sign-in (HKCU Run) — with the venue
+     auto-login account the agent is up minutes after boot, console hidden, output in
+     `C:\ProgramData\EsportsUtil\agent\esportsutil.log`. `autostart status|disable` to inspect/remove.
+   - **Server box / headless: Windows service.** From an **elevated** shell:
+     `esportsutil.exe service install` (auto-start + crash-restart 5s/30s/60s), then
+     `service start|stop|status|remove`. A service runs in session 0, so locate/downed overlays
+     need a logged-in session — that's why game PCs use tray mode, not the service.
 
 ## Windows-box gates (run once on real Windows, e.g. the P5000 Win11 VM)
 
@@ -60,5 +70,8 @@ These can't be exercised on Linux and gate a release:
 - [ ] `update_game` job with real `steamcmd` (`steamcmd_path` in config)
 - [ ] `cleanup_duplicate` + `remove_software` (protected veto) on real folders/registry
 - [ ] downed toggle → `SPI_SETDESKWALLPAPER` changes wallpaper; survives logoff/logon
+- [ ] `--tray` → icon + color changes (pairing→linked), tooltip/menu correct, Run-key console hidden, log file written
+- [ ] `service install|start|status|stop|remove` from elevated shell; crash-restart actions fire
+- [ ] `autostart enable` → tray agent back after sign-out/sign-in (and reboot with auto-login)
 - [ ] StateModule record: registry/WMI reads, label print path
 - [ ] `PERF_SECS=300` idle: <1% CPU, <60 MB working set on a game PC

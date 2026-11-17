@@ -4,8 +4,8 @@ using EsportsUtil.Server;
 using Microsoft.AspNetCore.Builder;
 
 string? roleFlag = null;
-string? configPath = null, foundConfig = null;
-bool overlayMode = false, downedOverlayMode = false;
+string? configPath = null, foundConfig = null, serviceNameFlag = null;
+bool overlayMode = false, downedOverlayMode = false, trayFlag = false, serviceFlag = false;
 var rawArgs = new List<string>(args);
 for (int i = 0; i < args.Length; i++)
     switch (args[i])
@@ -14,7 +14,26 @@ for (int i = 0; i < args.Length; i++)
         case DownedOverlayRequest.Flag: downedOverlayMode = true; break;
         case "--role" when i + 1 < args.Length: roleFlag = args[++i]; break;
         case "--config" when i + 1 < args.Length: configPath = args[++i]; break;
+        case "--tray": trayFlag = true; break;
+        case "--service": serviceFlag = true; break;
+        case "--name" when i + 1 < args.Length: serviceNameFlag = args[++i]; break;
     }
+
+// Ops verbs never start a role loop: service install/remove/start/stop/status, autostart enable/disable/status.
+var lifecycle = Lifecycle.Parse(args, trayFlag, serviceFlag, serviceNameFlag);
+if (lifecycle.IsOpsVerb)
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        Console.Error.WriteLine("'service' and 'autostart' are Windows-only operations.");
+        return 2;
+    }
+#if WINDOWS
+    return await ServiceOps.RunAsync(lifecycle.Verb!, lifecycle.SubVerb, lifecycle.ServiceName, configPath);
+#else
+    return 2;
+#endif
+}
 
 // Same-EXE locate overlay surface (PLAN.md Phase 4): spawned by the agent loop into the user session.
 if (overlayMode)
@@ -61,7 +80,7 @@ if (downedOverlayMode)
 
 EsportsConfig cfg;
 foundConfig = configPath ?? FirstRunSetup.FindConfigFile();
-if (foundConfig is null && roleFlag is null)
+if (foundConfig is null && roleFlag is null && lifecycle.Mode != RunMode.Service)
 {
     // First run: ask the operator instead of defaulting to a silent localhost agent
     // (the classic "PC never shows up on the dashboard" trap).
@@ -82,6 +101,12 @@ if (foundConfig is null && roleFlag is null)
     var written = FirstRunSetup.WriteConfig(FirstRunSetup.ConfigHomeDir(), cfg);
     Console.WriteLine($"wrote {written} — this PC will run as {cfg.Role}.");
 }
+else if (foundConfig is null && roleFlag is null)
+{
+    // Headless service mode has no one at the keyboard to answer a first-run dialog.
+    Console.Error.WriteLine("--service needs esportsutil.config.json next to the EXE (or --config <path>) — run the first-run setup interactively first.");
+    return 4;
+}
 else
 {
     cfg = EsportsConfig.Load(foundConfig);
@@ -91,24 +116,33 @@ Directory.CreateDirectory(cfg.DataDir);
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-if (cfg.Role == "server")
-    await ServerRole.RunAsync(cfg, cts.Token);
-else
+// One role loop, three hosts (PLAN.md lifecycle): console foreground, tray in the user session,
+// SCM-driven service. The loop object graph is identical — only the UI placement differs.
+switch (lifecycle.Mode)
 {
-    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-    var loop = new AgentLoop(http, cfg);
-    ClientDashboard? dash = null;
-    if (cfg.AgentDashboard)
-    {
-        // PLAN.md: the agent role serves the client operator view from a small localhost listener —
-        // read-only, loopback-only, reporting continues whether or not the page is open.
-        dash = ClientDashboard.Start(loop, cfg);
-        Console.WriteLine($"client dashboard: {dash.Url} (open in this PC's browser)");
-    }
-    await loop.RunAsync(cts.Token);
-    dash?.Stop();
+    case RunMode.Tray:
+#if WINDOWS
+        if (OperatingSystem.IsWindows()) return TrayApp.Run(cfg);
+#endif
+        Console.Error.WriteLine("--tray is Windows-only (no tray surface on this OS) — run the console foreground loop instead.");
+        return 2;
+
+    case RunMode.Service:
+#if WINDOWS
+        if (OperatingSystem.IsWindows())
+        {
+            Lifecycle.TeeConsoleToLog(cfg.DataDir);   // SCM gives us no console — operator reads the log file
+            System.ServiceProcess.ServiceBase.Run(new EsportsUtilService(cfg));
+            return 0;
+        }
+#endif
+        Console.Error.WriteLine("--service is Windows-only (no SCM on this OS).");
+        return 2;
+
+    default:
+        await RoleRunner.RunAsync(cfg, cts.Token);
+        return 0;
 }
-return 0;
 
 static (string role, string? url)? ConsoleSetupWizard()
 {

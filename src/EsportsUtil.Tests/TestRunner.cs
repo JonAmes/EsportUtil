@@ -595,6 +595,44 @@ if (File.Exists(agentBin))
 }
 else Check(false, "T11 esportsutil.dll not found next to tests — cannot measure budget");
 
+// ---------- T22: tray + service lifecycle primitives (pure builders; runtime gates stay Windows-box deploy gates) ----------
+var lc1 = Lifecycle.Parse(new[] { "service", "install", "--name", "EsportsUtilAgent" }, false, false, "EsportsUtilAgent");
+Check(lc1 is { Verb: "service", SubVerb: "install", Mode: RunMode.Foreground, ServiceName: "EsportsUtilAgent" },
+    "T22a service install verb parses to an ops command (never starts a role loop)");
+Check(Lifecycle.Parse(Array.Empty<string>(), true, false, null).Mode == RunMode.Tray, "T22b --tray selects the tray host");
+Check(Lifecycle.Parse(Array.Empty<string>(), false, true, null).Mode == RunMode.Service, "T22c --service selects the SCM service host");
+Check(Lifecycle.Parse(new[] { "--role", "agent" }, false, false, null).Verb is null
+    && Lifecycle.Parse(Array.Empty<string>(), false, false, null).ServiceName == "EsportsUtil",
+    "T22d non-verb argv passes through; default service name is EsportsUtil");
+Check(Lifecycle.KnownSubVerb("service", "install") && Lifecycle.KnownSubVerb("autostart", "status")
+    && !Lifecycle.KnownSubVerb("service", "nuke") && !Lifecycle.KnownSubVerb("service", null),
+    "T22e ops sub-verb gate rejects unknown/missing verbs");
+var t22Bin = Lifecycle.ServiceBinPath(@"C:\Program Files\EsportsUtil\esportsutil.exe", @"C:\Program Files\EsportsUtil\esportsutil.config.json");
+Check(t22Bin == "\"C:\\Program Files\\EsportsUtil\\esportsutil.exe\" --service --config \"C:\\Program Files\\EsportsUtil\\esportsutil.config.json\"",
+    "T22f binPath builder quotes spaces-in-paths, pins --service, carries --config");
+var t22Sc = Lifecycle.ScCreateArgs("EsportsUtil", @"C:\EsportsUtil\esportsutil.exe", null);
+Check(t22Sc is ["create", "EsportsUtil", "binPath=", "\"C:\\EsportsUtil\\esportsutil.exe\" --service", "start=", "auto"],
+    "T22g sc create argv shape: binPath= <quoted exe --service> start= auto");
+Check(Lifecycle.RunKeyValue(@"C:\Program Files\EsportsUtil\esportsutil.exe") == "\"C:\\Program Files\\EsportsUtil\\esportsutil.exe\" --tray",
+    "T22h HKCU Run value quotes the exe path and pins --tray");
+var stStart = TrayStatus.ForAgent(false, false, null, null, "active");
+var stBad = TrayStatus.ForAgent(true, false, null, "0042", "active");
+var stPair = TrayStatus.ForAgent(true, true, null, "0042", "active");
+var stDown = TrayStatus.ForAgent(true, true, "LAN-PC-01", "0042", "downed");
+var stLink = TrayStatus.ForAgent(true, true, "LAN-PC-01", "0042", "active");
+Check(stStart is ("starting", "gray", _) && stBad is ("offline", "red", _) && stPair is ("pairing", "amber", _)
+    && stDown is ("downed", "amber", _) && stLink is ("linked", "green", _),
+    "T22i tray status map: starting/offline/pairing/downed/linked drive the dot color");
+Check(stLink.Tip.Contains("LAN-PC-01") && stLink.Tip.Contains("0042")
+    && TrayStatus.ForServer("http://0.0.0.0:4300").Color == "green",
+    "T22j tooltip carries display name + PIN; server variant is green/running");
+var t22OrigOut = Console.Out;
+Lifecycle.TeeConsoleToLog(Path.Combine(tmp, "logtest"));
+Console.WriteLine("tee-marker-t22");
+Console.SetOut(t22OrigOut);
+Check(File.ReadAllText(Lifecycle.LogPath(Path.Combine(tmp, "logtest"))).Contains("tee-marker-t22"),
+    "T22k TeeConsoleToLog appends console output to <dataDir>/esportsutil.log (headless modes have no console reader)");
+
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
 return failed;
