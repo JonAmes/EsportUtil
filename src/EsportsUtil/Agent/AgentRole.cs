@@ -94,7 +94,7 @@ public sealed class AgentClient(HttpClient http, EsportsConfig cfg, AgentIdentit
     /// <summary>Scan + Record, then report only if content hash changed since the last accepted report.</summary>
     public Task<LocalManifest> BuildManifestAsync(CancellationToken ct = default)
     {
-        var (games, dupes) = GameScanner.Scan(cfg.ScanDirs);
+        var (games, dupes) = GameScanner.Scan(GameScanner.EffectiveScanDirs(cfg.ScanDirs, GameScanner.DefaultSteamRoot()));
         return Task.FromResult(new LocalManifest(id.ClientId, id.DevicePin, null, DateTimeOffset.UtcNow,
             AgentInfo.Version, StateModule.Record(), games, dupes.Count > 0 ? dupes : null));
     }
@@ -147,7 +147,9 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
     private bool _downOverlayDismissed;
     private string? _lastHash;
     private string? _wallpaperKey;   // desired wallpaper currently applied: content_id while downed, "venue@<sha>" for the venue upload
+    private bool _forceSelfUpdate;   // self_update directive (T30): check GitHub on this beat
     private bool _forceWallpaper;    // sync_wallpaper directive: re-run convergence even if the key is unchanged
+    private string? _steamCmdKey;    // last reported "found|install_state" verdict; flip forces a prompt report
     private bool _wpDriftShown;      // last drift verdict reported to the server (flip → force a report)
     private DateTime _reportNow = DateTime.MinValue;
 
@@ -225,6 +227,8 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                                     UpdateWatch.RequestScan();
                                     Console.WriteLine("scan_updates directive → Windows Update poll requested");
                                 }
+                                else if (d.Type == "self_update")
+                                    _forceSelfUpdate = true;   // operator pushed "app update" — poll GitHub now
                                 else if (d.Type == "sync_wallpaper")
                                 {
                                     _forceWallpaper = true;   // next beat re-runs convergence: re-verify cache, re-apply
@@ -259,6 +263,24 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                                 ? "wallpaper drift — desktop no longer matches the enforced image"
                                 : "wallpaper back in sync (or target removed)");
                         }
+                        // SteamCMD presence + winget bootstrap (operator request): a missing
+                        // steamcmd is repaired in the background by winget (never stalls the
+                        // spine); verdict flips force a prompt report so steamCmd lands in the
+                        // registry promptly.
+                        var scm = await SteamCmdWatch.CheckAsync(cfg, ct);
+                        var scmKey = $"{scm.Found}|{scm.InstallState}";
+                        if (scmKey != _steamCmdKey)
+                        {
+                            _steamCmdKey = scmKey;
+                            _reportNow = DateTime.UtcNow;
+                        }
+                        // Venue-app up-to-date model (T29): refresh the two vendor version probes
+                        // when their 12h cache ages out (fire-and-forget; apps node projects it).
+                        AppVersionCache.RefreshIfStale(http);
+                        // Self-update (T30): GitHub release cadence check; download+verify+handoff
+                        // runs fire-and-forget — the heartbeat never waits on GitHub.
+                        var suNow = _forceSelfUpdate; _forceSelfUpdate = false;
+                        await SelfUpdateWatch.CheckAsync(http, cfg, ct, force: suNow);
                         if (ack.Job is { } job)
                         {
                             Console.WriteLine($"job {job.Kind} '{job.Subject}' started ({job.JobId[..8]})");

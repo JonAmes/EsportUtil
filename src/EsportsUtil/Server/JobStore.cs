@@ -54,7 +54,7 @@ public sealed class JobStore
     }
 
     /// <summary>Agent-reported state transition. Returns the updated job, or null for an unknown/mismatched id.</summary>
-    public Job? Update(string jobId, string clientId, string state, string? detail)
+    public Job? Update(string jobId, string clientId, string state, string? detail, int? progress = null)
     {
         lock (_gate)
         {
@@ -66,6 +66,7 @@ public sealed class JobStore
             {
                 State = state,
                 Detail = detail ?? j.Detail,
+                Progress = progress ?? j.Progress,
                 StartedUnix = state == "running" ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() : j.StartedUnix,
                 FinishedUnix = state is "succeeded" or "failed" ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() : j.FinishedUnix,
             };

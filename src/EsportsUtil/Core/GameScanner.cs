@@ -23,6 +23,33 @@ public static class GameScanner
         return "other";
     }
 
+    /// <summary>The default Steam library's installed-games root ("C:\Program Files (x86)\Steam\
+    /// steamapps\common" on Windows). Empty when the location does not exist on this machine.</summary>
+    public static string DefaultSteamRoot()
+    {
+        var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        if (string.IsNullOrEmpty(pf)) return "";
+        var root = Path.Combine(pf, "Steam", "steamapps", "common");
+        return Directory.Exists(root) ? root : "";
+    }
+
+    /// <summary>Configured roots plus the default Steam root (operator request: Steam games
+    /// installed under the default library must be visible without extra config). Case-insensitive
+    /// dedupe on trailing-separator-normalized paths; configured order preserved; empty entries
+    /// dropped. Pure so the merge is unit-testable on any OS.</summary>
+    public static List<string> EffectiveScanDirs(IEnumerable<string> configured, string steamRoot)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var list = new List<string>();
+        foreach (var d in configured.Append(steamRoot))
+        {
+            if (string.IsNullOrWhiteSpace(d)) continue;
+            var key = d.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (seen.Add(key)) list.Add(d);
+        }
+        return list;
+    }
+
     /// <summary>Version probe order: version.txt / VERSION.txt / version file in the game folder.
     /// Unknown versions report as "unknown" — the Master Manifest comparison (Phase 2) acts on them.</summary>
     public static string ProbeVersion(string gameDir)

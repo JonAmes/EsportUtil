@@ -55,3 +55,9 @@ dotnet run --project src/EsportsUtil -f net8.0 -- --role agent  --config <agent.
 ```
 Copy the EXE + a config (see `deploy/*.example.json`) to any Windows PC; first agent run prints
 the PIN. Details, trim caveats, and the pre-release Windows gate checklist: `deploy/BUILD.md`.
+
+**The app updates itself.** Tag a release (`git tag v0.6.0 && git push origin v0.6.0`) and GitHub
+Actions builds the win-x64 EXE and publishes it. Agents poll the repo's latest release on a timer,
+download the asset over https, verify its sha256, replace their own EXE, and restart — straight
+back into the tray. On Windows the EXE double-click *is* the tray launch (no CLI needed), and tray
+mode registers itself as a logon autostart (HKCU Run) so a venue PC is never babysitted.

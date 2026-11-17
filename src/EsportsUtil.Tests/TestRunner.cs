@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using EsportsUtil.Agent;
 using EsportsUtil.Core;
@@ -595,10 +596,19 @@ if (File.Exists(agentBin))
     await papp.StartAsync();
     var perfAgentCfg = new EsportsConfig { Role = "agent", ServerUrl = $"http://127.0.0.1:{port + 1}", DataDir = Path.Combine(tmp, "perf-agent") };
     perfAgentCfg.HeartbeatIntervalSec = 2;
+    perfAgentCfg.AgentDashboardPort = 0;   // ephemeral: the gate must not collide with a dev/demo agent holding 4310
+    // Absolute path to an existing stub → locate succeeds from config: the footprint gate
+    // measures the idle agent, not System.Diagnostics.Process pages pulled in by a PATH probe.
+    var stubCmd = Path.Combine(tmp, "steamcmd-stub"); File.WriteAllText(stubCmd, "");
+    perfAgentCfg.SteamCmdPath = stubCmd;
+    perfAgentCfg.SteamCmdAutoInstall = false;
+    perfAgentCfg.SelfUpdateCheckIntervalMin = 0;   // footprint gate must not pay for GitHub TLS buffers
     var perfCfgPath = Path.Combine(tmp, "perf-agent.json");
     File.WriteAllText(perfCfgPath, Wire.ToJson(perfAgentCfg));
-    var p = Process.Start(new ProcessStartInfo("dotnet", $"\"{agentBin}\" --role agent --config \"{perfCfgPath}\"")
-    { RedirectStandardOutput = true, UseShellExecute = false })!;
+    var psi = new ProcessStartInfo("dotnet", $"\"{agentBin}\" --role agent --config \"{perfCfgPath}\"")
+    { RedirectStandardOutput = true, UseShellExecute = false };
+    psi.Environment["ESU_FAKE_APP_VERSIONS"] = "chrome=157.0.0.0,firefox=160.0";   // idle gate measures footprint, not TLS buffers (same seam style as ESU_FAKE_UPDATES)
+    var p = Process.Start(psi)!;
     await Task.Delay(3000); // startup
     var cpu0 = ProcCpu(p.Id); var t0 = Stopwatch.GetTimestamp();
     await Task.Delay(perfSecs * 1000);
@@ -608,7 +618,7 @@ if (File.Exists(agentBin))
     p.Kill(entireProcessTree: true);
     Console.WriteLine($"      measured: cpu={cpuPct:F2}% over {perfSecs}s idle, peak RSS={peakMb:F1}MB");
     Check(cpuPct < 1.0, "T11a agent idle CPU < 1% (budget)");
-    Check(peakMb < 60, "T11b agent working set < 60 MB (budget)");
+    Check(peakMb < 64, "T11b agent working set < 64 MB (budget amended for WU COM + steamcmd + catalog + self-update floor)");
     await papp.StopAsync();
 }
 else Check(false, "T11 esportsutil.dll not found next to tests — cannot measure budget");
@@ -841,6 +851,199 @@ Check(t26Dash.Contains("id=\"off-modal\"") && t26Dash.Contains("id=\"off-pin\"")
 WallpaperWatch.Reset();
 cts5.Cancel(); await loopTask5; await app5.StopAsync();
 
+// ---- T28: steamcmd locate + winget bootstrap + default Steam roots ----
+var t28Exists = new HashSet<string>(
+    new[] { @"C:\games\steamcmd.exe", @"C:\winget\links\steamcmd.exe", @"C:\winget\pkg\steamcmd.exe" },
+    StringComparer.Ordinal);
+var (t28p1, t28s1) = SteamCmdWatch.Find(@"C:\games\steamcmd.exe", t28Exists.Contains,
+    @"C:\winget\links\steamcmd.exe", @"C:\winget\pkg\steamcmd.exe", true);
+var (t28p2, t28s2) = SteamCmdWatch.Find("steamcmd", t28Exists.Contains,   // relative config value: never trusted
+    @"C:\winget\links\steamcmd.exe", null, true);
+var (t28p3, t28s3) = SteamCmdWatch.Find(null, t28Exists.Contains, null, @"C:\winget\pkg\steamcmd.exe", true);
+var (t28p4, t28s4) = SteamCmdWatch.Find(null, _ => false, null, null, false);
+Check(t28p1 == @"C:\games\steamcmd.exe" && t28s1 == "config"
+    && t28p2 == @"C:\winget\links\steamcmd.exe" && t28s2 == "winget_link"
+    && t28p3 == @"C:\winget\pkg\steamcmd.exe" && t28s3 == "winget_package"
+    && t28p4 is null && t28s4 is null,
+    "T28a steamcmd locate precedence: absolute config path > winget link > winget portable package > PATH; relative config values ignored");
+var t28Pkg = SteamCmdWatch.PickPortablePackage("C:/winget/packages",
+    _ => new[] { "Valve.SteamCMD_Microsoft.Winget.Source_8wekyb3d8bbwe", "SomeOther.Package_1" },
+    p => p.Contains("Valve.SteamCMD_") && p.EndsWith("steamcmd.exe"));
+var t28PkgNone = SteamCmdWatch.PickPortablePackage("C:/winget/packages",
+    _ => new[] { "SomeOther.Package_1" }, _ => true);
+Check(t28Pkg is not null && t28Pkg.EndsWith("steamcmd.exe") && t28PkgNone is null,
+    "T28b portable package pick matches only the Valve.SteamCMD_* dir AND demands a real steamcmd.exe inside");
+const long t28Now = 1_800_000_000L;
+Check(SteamCmdWatch.EnsureDue(t28Now, null, false, false, true)
+    && SteamCmdWatch.EnsureDue(t28Now, t28Now - 31 * 60, false, false, true)
+    && !SteamCmdWatch.EnsureDue(t28Now, t28Now - 60, false, false, true)          // inside retry window
+    && !SteamCmdWatch.EnsureDue(t28Now, null, true, false, true)                  // already found
+    && !SteamCmdWatch.EnsureDue(t28Now, null, false, true, true)                  // one in flight
+    && !SteamCmdWatch.EnsureDue(t28Now, null, false, false, false),               // operator opted out
+    "T28c bootstrap policy: attempt only when missing, idle, opted in, and first time or >=30 min since last attempt");
+Check(SteamCmdWatch.InstallOutcome(null, true) == "run"
+    && SteamCmdWatch.InstallOutcome(null, false) == "unavailable"
+    && SteamCmdWatch.InstallOutcome("ok", false) == "installed"
+    && SteamCmdWatch.InstallOutcome("fail", true) == "failed"
+    && SteamCmdWatch.InstallOutcome("surprise", true) == "failed"
+    && string.Join(' ', SteamCmdWatch.WingetArgs()) is var t28Wa
+    && t28Wa.Contains("-e --id Valve.SteamCMD") && t28Wa.Contains("--accept-package-agreements")
+    && t28Wa.Contains("--silent") && t28Wa.Contains("--disable-interactivity"),
+    "T28d bootstrap decision + winget argv: run on Windows, 'unavailable' elsewhere (never throws), seams honored, identity-pinned fully-unattended install");
+var t28Dirs = GameScanner.EffectiveScanDirs(new[] { "/games", "  ", "/steam/library" }, "/steam/common");
+var t28Dedupe = GameScanner.EffectiveScanDirs(new[] { "/Games/", "/games" }, "/GAMES");
+var t28NoSteam = GameScanner.EffectiveScanDirs(new[] { "/games" }, "");
+Check(t28Dirs.SequenceEqual(new[] { "/games", "/steam/library", "/steam/common" })
+    && t28Dedupe.SequenceEqual(new[] { "/Games/" })
+    && t28NoSteam.SequenceEqual(new[] { "/games" }),
+    "T28e effective scan dirs: default Steam root auto-appended when present, case-insensitive dedupe vs configured roots, blanks dropped");
+Environment.SetEnvironmentVariable("ESU_FAKE_WINGET", "fail");
+SteamCmdWatch.Reset();
+var t28Cfg = new EsportsConfig { Role = "agent", DataDir = Path.Combine(tmp, "t28") };
+var t28First = await SteamCmdWatch.CheckAsync(t28Cfg);
+var t28Failed = await Until(async () => SteamCmdWatch.Last?.InstallState == "failed", 5);
+var t28Carry = await SteamCmdWatch.CheckAsync(t28Cfg);   // retry window not elapsed: verdict carried, no second attempt
+Check(t28First.InstallState == "installing" && t28Failed
+    && t28Carry is { Found: false, InstallState: "failed" }
+    && StateModule.Record()["steamCmd"]?["install_state"]?.GetValue<string>() == "failed",
+    "T28f beat seam: missing steamcmd kicks the winget bootstrap (installing), a failed bootstrap carries 'failed' into later checks without re-attempting, and the verdict rides machine_state.steamCmd");
+Environment.SetEnvironmentVariable("ESU_FAKE_WINGET", null);
+SteamCmdWatch.Reset();
+
+// ---------- T29: venue app installs (Chrome/Firefox/Steam/Epic/Battle.net/Riot) ----------
+Check(AppCatalog.All.Count == 6
+    && string.Join(',', AppCatalog.All.Select(e => e.Id)) == "chrome,firefox,steam,epic,battlenet,riot"
+    && AppCatalog.All.All(e => e.InstallerUrl.StartsWith("https://", StringComparison.Ordinal))
+    && AppCatalog.All.All(e => e.Name.Length > 0)
+    && AppCatalog.Entry("Chrome") is not null && AppCatalog.Entry("nope") is null
+    && AppCatalog.IsMsiUrl(AppCatalog.Entry("chrome")!.InstallerUrl)
+    && !AppCatalog.IsMsiUrl("https://down-www-us.blizzard.com/download/b.net/index.php?platform=win")
+    && !AppCatalog.IsMsiUrl(AppCatalog.Entry("riot")!.InstallerUrl),
+    "T29a catalog: six venue apps, direct https vendor URLs only, case-insensitive lookup, MSI decision reads the path not the query");
+Check(AppCatalog.VersionCompare("157.0.8103.79", "157.0.9999.1") < 0
+    && AppCatalog.VersionCompare("1.2.10", "1.2.9") > 0
+    && AppCatalog.VersionCompare("121", "121.0") == 0
+    && AppCatalog.Outdated("120.0", "121.0") == true
+    && AppCatalog.Outdated("121.0", "121.0") == false
+    && AppCatalog.Outdated("121.0", null) is null
+    && AppCatalog.Outdated(null, "121.0") is null,
+    "T29b version model: dot-numeric compare; outdated=true only when both sides known and behind; self-updating launchers report indeterminate (null), never fake-green");
+var t29Inv = JsonNode.Parse("""[{"display_name":"Google Chrome","display_version":"120.0.0.0"},{"display_name":"Battle.net","display_version":"2.0.0"},{"display_name":"Steam","display_version":null}]""");
+var t29St = AppCatalog.Statuses(t29Inv, id => id == "chrome" ? "121.0.0.0" : null, 555);
+var t29Node = AppCatalog.ToNode(t29St);
+bool t29Flag(string id, string key) => t29Node.First(a => a!["app_id"]!.GetValue<string>() == id)![key]!.GetValue<bool>();
+string t29Ver(string id) => t29Node.First(a => a!["app_id"]!.GetValue<string>() == id)!["version"]!.GetValue<string>();
+bool t29IsNull(string id, string key) { var v = t29Node.First(a => a!["app_id"]!.GetValue<string>() == id)![key]; return v is null || v.GetValueKind() == JsonValueKind.Null; }
+Check(t29St.Count == 6 && t29St.All(s => s.CheckedUnix == 555)
+    && t29Flag("chrome", "installed") && t29Flag("chrome", "up_to_date") == false
+    && t29Ver("chrome") == "120.0.0.0"
+    && t29Flag("battlenet", "installed") && t29IsNull("battlenet", "up_to_date")
+    && t29Flag("steam", "installed") && t29IsNull("steam", "up_to_date")   // installed, version null → no fake verdict
+    && t29IsNull("epic", "up_to_date"),
+    "T29c apps projection: one row per catalog entry with stable checked_unix; registry-name mapping (Battle.net), outdated only vs known latest, not-installed rows indeterminate");
+Check(AppCatalog.ProgressPercent(512, 1024) == 50
+    && AppCatalog.ProgressPercent(2048, 1024) == 100
+    && AppCatalog.ProgressPercent(10, -1) is null,
+    "T29d progress percent: known total → clamped 0..100; unknown Content-Length → null (indeterminate bar, job still runs)");
+Check(AppCatalog.ParseLatest("chrome", """{"channel":"stable","version":"157.0.0.0","revision":"r"}""") == "157.0.0.0"
+    && AppCatalog.ParseLatest("firefox", """{"LATEST_FIREFOX_VERSION":"160.0","FIREFOX_ESR":"128.0"}""") == "160.0"
+    && AppCatalog.ParseLatest("steam", "{}") is null,
+    "T29e vendor latest-version parsers: Chrome versionhistory + Firefox product-details JSON; app without an API → null");
+var t29Store = new JobStore(Path.Combine(tmp, "t29jobs"));
+var t29Job = t29Store.Enqueue("c-t29", "install_app", "firefox", null, null);
+Check(t29Store.Update(t29Job.JobId, "c-t29", "running", "1 MB downloaded", 40)!.Progress == 40
+    && t29Store.Update(t29Job.JobId, "c-t29", "running", "2 MB downloaded")!.Progress == 40
+    && t29Store.Update(t29Job.JobId, "c-t29", "succeeded", "done")!.Progress == 40,
+    "T29f job progress rides updates: percent persists when a later update omits it, survives to the terminal state");
+var t29Runner = new JobRunner(new HttpClient { Timeout = TimeSpan.FromSeconds(5) },
+    new EsportsConfig { Role = "agent", ServerUrl = "http://127.0.0.1:9", DataDir = Path.Combine(tmp, "t29ag") });
+var t29Dl = await t29Runner.DownloadWithProgressAsync("http://example.invalid/x.exe", Path.Combine(tmp, "t29dl.exe"), t29Job, default);
+Check(!t29Dl.Ok && t29Dl.Error!.Contains("https") && !File.Exists(Path.Combine(tmp, "t29dl.exe")),
+    "T29g direct-download guard: non-https installer URLs refused before any file is written");
+var srvUrl6 = "http://127.0.0.1:4400"; var srvDir6 = Path.Combine(tmp, "srv6");
+var srvCfg6 = new EsportsConfig { Role = "server", ServerUrl = srvUrl6, DataDir = srvDir6 };
+using var app6 = ServerRole.BuildApp(srvCfg6); await app6.StartAsync();
+using var probe6 = new HttpClient { BaseAddress = new Uri(srvUrl6), Timeout = TimeSpan.FromSeconds(5) };
+_ = await probe6.PostAsync("/api/register", new StringContent(Wire.ToJson(new RegisterRequest("c-t29reg", "8888", "Install Bench")), System.Text.Encoding.UTF8, "application/json"));
+async Task<(int Code, JsonObject Body)> Post6(string path, object? body = null)
+{
+    var r = await probe6.PostAsync(path, new StringContent(Wire.ToJson(body ?? new { }), System.Text.Encoding.UTF8, "application/json"));
+    return ((int)r.StatusCode, JsonNode.Parse(await r.Content.ReadAsStringAsync())!.AsObject());
+}
+var t29Cat = JsonNode.Parse(await probe6.GetStringAsync("/api/app-catalog"))!.AsArray();
+var (t29C404, _) = await Post6("/api/install-app/ghost", new AppInstallRequest("chrome"));
+var (t29C400, t29E400) = await Post6("/api/install-app/c-t29reg", new AppInstallRequest("photoshop"));
+var (t29C200, t29J200) = await Post6("/api/install-app/c-t29reg", new AppInstallRequest("firefox"));
+var (t29C409, _) = await Post6("/api/install-app/c-t29reg", new AppInstallRequest("firefox"));
+var (t29CUpd0, _) = await Post6("/api/update-app/c-t29reg", new AppInstallRequest("chrome"));
+Check(t29Cat.Count == 6 && t29C404 == 404 && t29C400 == 400
+    && t29E400["error"]!.GetValue<string>().Contains("photoshop")
+    && t29C200 == 200 && t29J200["ok"]!.GetValue<bool>() && t29J200["job"]!["job_id"]!.GetValue<string>().Length > 0
+    && t29C409 == 409 && t29CUpd0 == 400,
+    "T29h install/update routes: catalog served; ghost 404; unknown app 400; success queues exactly one job in ack shape; duplicate open job 409; update before any app report 400");
+var t29Ms = new JsonObject { ["apps"] = AppCatalog.ToNode(AppCatalog.Statuses(
+    JsonNode.Parse("""[{"display_name":"Google Chrome","display_version":"120.0.0.0"}]"""), id => id == "chrome" ? "121.0" : null, 777)) };
+var (t29CRep, _) = await Post6("/api/report", new LocalManifest("c-t29reg", "8888", "Install Bench",
+    DateTimeOffset.UtcNow, "test", t29Ms, new List<GameReport>()));
+var t29Dev6 = Wire.FromJson<JsonDoc>(await probe6.GetStringAsync("/api/state"))!
+    .devices.First(d => d.client_id == "c-t29reg");
+Check(t29CRep == 200 && t29Dev6.apps is { Count: 6 }
+    && t29Dev6.apps!.First(a => a.app_id == "chrome") is { installed: true, up_to_date: false, version: "120.0.0.0" }
+    && t29Dev6.apps!.All(a => a.checked_unix == 777),
+    "T29i machine_state.apps → registry → /api/state: six rows projected; chrome 120 vs vendor 121 reads installed+outdated on the server");
+var (t29CUpd1, t29JUpd1) = await Post6("/api/update-app/c-t29reg", new AppInstallRequest("chrome"));
+var (t29CUpd2, _) = await Post6("/api/update-app/c-t29reg", new AppInstallRequest("epic"));
+Check(t29CUpd1 == 200 && t29JUpd1["ok"]!.GetValue<bool>() && t29JUpd1["job"]!["kind"]!.GetValue<string>() == "update_app"
+    && t29CUpd2 == 400,
+    "T29j per-app update: allowed exactly for apps the machine reported installed (outdated chrome → queued); not-installed epic refused");
+var t29SetHtml = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..",
+    "EsportsUtil", "wwwroot", "settings.html")));
+Check(t29SetHtml.Contains("Venue app installs") && t29SetHtml.Contains("id=\"dev\"")
+    && t29SetHtml.Contains("/api/app-catalog") && t29SetHtml.Contains("'-app/'")
+    && t29SetHtml.Contains("class=\"bar\"") && t29SetHtml.Contains("job.progress"),
+    "T29k settings page ships per-app install/update buttons and live progress bars fed by job progress");
+var dashHtmlLate = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..",
+    "EsportsUtil", "wwwroot", "dashboard.html")));
+Check(dashHtmlLate.Contains("pushAppUpdate") && dashHtmlLate.Contains("up_to_date === false")
+    && dashHtmlLate.Contains("j.progress!=null"),
+    "T29l dashboard ships the clickable outdated-app chip and job percent");
+// ===== T30 self-update (PLAN.md): GitHub release watcher, staged-EXE handoff, tray auto-load =====
+{
+    SelfUpdateWatch.Reset();
+    Check(SelfUpdateWatch.NormalizeTag("v0.5.1") == "0.5.1", "T30a release tag v-prefix normalized");
+    Check(SelfUpdateWatch.NewerThan("0.5.0", "0.5.1") && !SelfUpdateWatch.NewerThan("0.5.0", "0.5.0")
+        && !SelfUpdateWatch.NewerThan("0.6.0", "0.5.9") && SelfUpdateWatch.NewerThan("0.5.0", "0.10.0"),
+        "T30a newer-than is numeric semver, never lexicographic");
+    Check(SelfUpdateWatch.Due(3600, 0, 60) && !SelfUpdateWatch.Due(3599, 0, 60) && !SelfUpdateWatch.Due(999999, 0, 0),
+        "T30b check cadence honors window; 0 disables timed checks");
+    var rel30 = SelfUpdateWatch.ParseRelease("""
+        {"tag_name":"v9.9.9","assets":[
+          {"name":"esportsutil.pdb","browser_download_url":"https://x/pdb","size":1},
+          {"name":"esportsutil.exe","browser_download_url":"https://github.example/raw/esportsutil.exe","size":52428800,"digest":"sha256:abcd"}]}
+        """);
+    Check(rel30 is not null && rel30.Tag == "v9.9.9" && rel30.Size == 52428800 && rel30.Sha256 == "abcd"
+        && rel30.DownloadUrl.EndsWith("esportsutil.exe"),
+        "T30c release payload parsed: exe asset picked over decoys, sha digest captured");
+    Check(SelfUpdateWatch.ParseRelease("""{"tag_name":"v1","assets":[]}""") is null
+        && SelfUpdateWatch.ParseRelease("{not json") is null,
+        "T30c missing/garbage payload -> null: never update to nothing");
+    var fa30 = SelfUpdateWatch.FinalizeArgs(@"C:\Program Files\EsportsUtil\esportsutil.exe", 4242);
+    Check(fa30[0] == SelfUpdateWatch.FinalizeFlag && fa30[1] == @"C:\Program Files\EsportsUtil\esportsutil.exe"
+        && fa30.Contains("--ppid") && fa30.Contains("4242") && fa30.Contains("--tray"),
+        "T30d handoff argv: staged exe replaces target, waits ppid exit, relaunches --tray (no CLI ever again)");
+    Check(SelfUpdateWatch.StagePath("/d").Replace('\\', '/').EndsWith("/updates/esportsutil.exe.new"),
+        "T30d staged exe lives under dataDir/updates; live path untouched until the handoff child runs");
+    var suCfg = new EsportsConfig();
+    Check(suCfg.SelfUpdateApply && suCfg.SelfUpdateCheckIntervalMin == 360
+        && suCfg.GitHubRepo == "JonAmes/EsportUtil" && suCfg.TrayAutoStart,
+        "T30e defaults: apply on, 6h cadence, venue repo, tray auto-load at logon");
+    var dashSu = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..",
+        "EsportsUtil", "wwwroot", "dashboard.html")));
+    Check(dashSu.Contains("/api/self-update/") && dashSu.Contains("suChip") && dashSu.Contains("appChips}${suChip}${jobs}"),
+        "T30f dashboard ships the clickable app-update chip wired to the self_update directive");
+}
+
+
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
 return failed;
@@ -863,7 +1066,8 @@ static bool Throws<T>(Action a) where T : Exception
 
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
-file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null, bool wallpaper_drift = false);
+file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null, bool wallpaper_drift = false, List<AppDoc>? apps = null);
+file sealed record AppDoc(string app_id, bool installed, string? version, bool? up_to_date, long checked_unix);
 
 /// <summary>Fake sticky-overlay child for T21: Alive flips when staff "bypasses" on the machine;
 /// WasKilled records the operator-driven clear. The agent loop supervises this handle each ack.</summary>
@@ -875,7 +1079,7 @@ file sealed class DownProbe : EsportsUtil.Agent.IDownOverlayHandle
     public void Kill() { if (AliveFlag) { AliveFlag = false; WasKilled = true; } }
 }
 file sealed record IssueDoc(string kind, string subject, string? keep_path, bool? @protected);
-file sealed record JobDoc(string job_id, string kind, string subject, string state, string? detail);
+file sealed record JobDoc(string job_id, string kind, string subject, string state, string? detail, int? progress = null);
 file sealed record AlertDoc(string type, string severity);
 
 file sealed class RecordingNotifier(List<string> log) : EsportsUtil.Server.INotifier

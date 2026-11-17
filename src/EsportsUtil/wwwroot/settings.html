@@ -39,6 +39,19 @@ h2{font-size:13px;margin:0 0 4px;font-weight:590;letter-spacing:.02em}
 .drop.over{border-color:var(--acc);background:rgba(109,141,255,.14);color:var(--fg);
  box-shadow:0 0 24px color-mix(in srgb,var(--acc) 25%,transparent)}
 .drop b{color:var(--fg)}
+.apps{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:14px}
+.app{border:1px solid var(--hair);border-radius:12px;padding:12px;background:rgba(255,255,255,.02)}
+.app h3{margin:0 0 4px;font-size:14px;color:var(--fg)}
+.app .st{font-size:12px;color:var(--mut);min-height:16px}
+.app .st.old{color:#ef4444} .app .st.ok{color:#22c55e}
+.bar{height:6px;border-radius:3px;background:rgba(255,255,255,.08);margin-top:8px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--acc);border-radius:3px;transition:width .5s}
+.bar i.ind{width:40%;animation:slide 1.2s infinite}
+@keyframes slide{0%{margin-left:-40%}100%{margin-left:100%}}
+.app button{margin-top:8px;padding:6px 12px;border-radius:8px;border:1px solid var(--bdr);
+  background:rgba(109,141,255,.15);color:var(--fg);cursor:pointer;font:inherit;font-size:12px}
+.app button.upd{background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.4)}
+.app button:disabled{opacity:.45;cursor:default}
 .msg{font-size:12px;margin-top:10px;min-height:16px}
 .msg.ok{color:var(--ok)} .msg.err{color:var(--bad)}
 .cur{display:flex;gap:14px;align-items:center;margin-top:14px}
@@ -101,6 +114,23 @@ button.rm:hover{color:var(--bad);border-color:var(--bad)}
     <div class="note">Each PC applies it within one heartbeat (up to ~15&nbsp;s) and keeps its own
       baseline — removing the venue wallpaper restores each desktop to what it had before. A
       downed PC keeps its OUT OF SERVICE marker on top until it returns to service.</div>
+  </div>
+
+  <div class="card">
+    <h2>Venue app installs</h2>
+    <p class="sub">Pick a station, then install any of the six venue apps straight from the vendor's
+      own server — the agent streams the download and this page shows its progress live. Each PC
+      reports the installed version; when the vendor exposes a current-version API (Chrome, Firefox)
+      an outdated install gets a red <b>update</b> button.</p>
+
+    <label class="sub" for="dev" style="display:block;margin-bottom:6px">Station</label>
+    <select id="dev" style="width:100%;padding:9px 10px;border-radius:10px;background:var(--card);color:var(--fg);border:1px solid var(--bdr);font:inherit"></select>
+    <div class="apps" id="apps"></div>
+
+    <div class="note">Installers come from the vendors directly (Google, Mozilla, Valve, Epic,
+      Blizzard, Riot) over HTTPS — never from a third-party mirror. Steam, Epic, Battle.net and the
+      Riot Client self-update in place, so their status shows what is installed rather than a
+      guess about currency; <b>update</b> re-runs the vendor's latest installer for any app.</div>
   </div>
 </div>
 
@@ -187,6 +217,65 @@ async function load() {
   } catch { }
 }
 load();
+
+// ---- Venue app installs (T29) ----
+// Catalog comes from the server (single source of truth with the agent's AppCatalog). Tiles show
+// what the selected station reported (machine_state.apps), and a live progress bar rides the
+// install_app / update_app job while the agent streams the vendor installer.
+let CAT = [], DEVS = [], selDev = null;
+const devSel = document.getElementById('dev'), appsEl = document.getElementById('apps');
+const esc2 = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
+function renderApps() {
+  const dev = DEVS.find(d => d.client_id === selDev);
+  const rows = Object.fromEntries((dev?.apps || []).map(a => [a.app_id, a]));
+  const jobOf = id => (dev?.jobs || []).find(j =>
+    (j.kind === 'install_app' || j.kind === 'update_app') && j.subject === id &&
+    (j.state === 'queued' || j.state === 'running'));
+  appsEl.innerHTML = CAT.map(e => {
+    const a = rows[e.id], job = jobOf(e.id);
+    let st = 'not installed', stCls = '';
+    if (job) { st = (job.state === 'queued' ? 'queued… ' : 'downloading… ') + (job.detail || ''); stCls = ''; }
+    else if (a?.installed) {
+      if (a.up_to_date === false) { st = 'v' + (a.version || '?') + ' — update available'; stCls = 'old'; }
+      else if (a.up_to_date === true) { st = 'v' + (a.version || '?') + ' — up to date'; stCls = 'ok'; }
+      else st = 'v' + (a.version || '?') + (a.version ? '' : ' (version unknown)');
+    }
+    const bar = job ? '<div class="bar"><i class="' + (job.progress == null ? 'ind' : '') +
+      '" style="width:' + (job.progress ?? 0) + '%"></i></div>' : '';
+    const btn = job ? '<button disabled>working…</button>'
+      : a?.installed ? '<button class="upd" onclick="appAct(\'' + e.id + '\',\'update\')">Update</button>'
+      : '<button onclick="appAct(\'' + e.id + '\',\'install\')">Install</button>';
+    return '<div class="app"><h3>' + esc2(e.name) + '</h3><div class="st ' + stCls + '">' + esc2(st) + '</div>' + bar + btn + '</div>';
+  }).join('') || '<p class="sub">No station selected — pair a device first.</p>';
+}
+
+async function appAct(id, mode) {
+  if (!selDev) return;
+  const r = await fetch('/api/' + mode + '-app/' + selDev, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ app_id: id }) });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    alert(j.error || j.message || ('request rejected (HTTP ' + r.status + ')'));
+  }
+  renderApps();   // job appears on the next poll; re-render optimistic state now
+}
+devSel.addEventListener('change', () => { selDev = devSel.value; renderApps(); });
+
+(async function appsTick() {
+  try { CAT = await (await fetch('/api/app-catalog')).json(); } catch { }
+  for (;;) {
+    try {
+      const st = await (await fetch('/api/state')).json();
+      DEVS = st.devices || [];
+      if (!selDev || !DEVS.some(d => d.client_id === selDev)) selDev = DEVS[0]?.client_id || null;
+      devSel.innerHTML = DEVS.map(d => '<option value="' + d.client_id + '"' +
+        (d.client_id === selDev ? ' selected' : '') + '>' + esc2(d.display_name || d.client_id.slice(0, 8)) + '</option>').join('');
+    } catch { }
+    renderApps();
+    await new Promise(res => setTimeout(res, 3000));
+  }
+})();
 </script>
 </body>
 </html>

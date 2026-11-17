@@ -66,6 +66,7 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
                 "cleanup_duplicate" => CleanupDuplicate(job),
                 "remove_software" => RemoveSoftware(job),
                 "deploy_content" => await EnsureContentAsync(job.Subject, ct),
+                "install_app" or "update_app" => await InstallAppAsync(job, ct),
                 _ => (false, $"unknown job kind '{job.Kind}' — refused"),
             };
         }
@@ -81,7 +82,10 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
     {
         var args = SteamCmdArgs(job.Path ?? throw new InvalidOperationException("missing install path"),
                                job.Arg ?? throw new InvalidOperationException("missing app id"));
-        var exit = await RunProcessAsync(cfg.SteamCmdPath, args, TimeSpan.FromMinutes(cfg.JobTimeoutMin), ct);
+        // Prefer the discovered steamcmd (config path → winget link/package → PATH); fall back to
+        // the bare config name only when nothing was located (job fails fast with exit != 0 then).
+        var exe = SteamCmdWatch.Last is { Found: true, Path: { } sc } ? sc : cfg.SteamCmdPath;
+        var exit = await RunProcessAsync(exe, args, TimeSpan.FromMinutes(cfg.JobTimeoutMin), ct);
         if (exit != 0) return (false, $"steamcmd exit {exit}");
         return (true, $"app_update {job.Arg} validate → exit 0 in {job.Path}");
     }
@@ -89,13 +93,14 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
     private (bool, string) CleanupDuplicate(Job job)
     {
         var keep = job.Path ?? throw new InvalidOperationException("missing keep-path");
-        var scan = GameScanner.Scan(cfg.ScanDirs);           // fresh truth, not the server's stale copy list
+        var roots = GameScanner.EffectiveScanDirs(cfg.ScanDirs, GameScanner.DefaultSteamRoot());
+        var scan = GameScanner.Scan(roots);                    // fresh truth, not the server's stale copy list
         var current = scan.Reports.Where(g => g.GameId == job.Subject).Select(g => g.InstallPath).ToList();
         var doomed = DuplicateCleanupPlan(current, keep);
         var removed = 0;
         foreach (var p in doomed)
         {
-            if (!cfg.ScanDirs.Any(root => Path.GetFullPath(p).StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase)))
+            if (!roots.Any(root => Path.GetFullPath(p).StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException($"refusing to delete outside scan roots: {p}");
             Directory.Delete(p, recursive: true);
             removed++;
@@ -152,14 +157,86 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
 
     // ---------- job state reporting (best-effort: agent keeps looping even if a report is lost) ----------
 
-    public async Task ReportJobStateAsync(Job job, string state, string? detail, CancellationToken ct = default)
+    public async Task ReportJobStateAsync(Job job, string state, string? detail, CancellationToken ct = default, int? progress = null)
     {
         try
         {
             await http.PostAsync($"{cfg.ServerUrl}/api/job_update",
-                new StringContent(Wire.ToJson(new JobUpdateRequest(job.JobId, job.ClientId, state, detail)), System.Text.Encoding.UTF8, "application/json"), ct);
+                new StringContent(Wire.ToJson(new JobUpdateRequest(job.JobId, job.ClientId, state, detail, progress)), System.Text.Encoding.UTF8, "application/json"), ct);
         }
         catch (HttpRequestException) { /* server will re-dispatch or time the job out */ }
+    }
+
+    // ---------- venue app installs (T29): direct vendor download + progress + silent run ----------
+
+    /// <summary>Stream a vendor installer to disk, reporting throttled progress onto the job.
+    /// Unknown Content-Length (redirect-based vendors) → null percent: job still runs, the bar
+    /// just renders indeterminate on the dashboard.</summary>
+    public async Task<(bool Ok, string? Error)> DownloadWithProgressAsync(string url, string file, Job job, CancellationToken ct)
+    {
+        if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return (false, "installer URL is not https — refused");
+        try
+        {
+            using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!resp.IsSuccessStatusCode) return (false, $"download failed: HTTP {(int)resp.StatusCode}");
+            long total = resp.Content.Headers.ContentLength ?? -1;
+            await using var src = await resp.Content.ReadAsStreamAsync(ct);
+            await using var dst = File.Create(file);
+            var buf = new byte[64 * 1024];
+            long done = 0, sinceReport = 0;
+            var lastReport = DateTime.MinValue;
+            int n;
+            while ((n = await src.ReadAsync(buf, ct)) > 0)
+            {
+                await dst.WriteAsync(buf.AsMemory(0, n), ct);
+                done += n; sinceReport += n;
+                var pct = AppCatalog.ProgressPercent(done, total);
+                if (sinceReport >= 512_000 && (DateTime.UtcNow - lastReport).TotalSeconds >= 1)
+                {
+                    await ReportJobStateAsync(job, "running", $"{done / (1024 * 1024)} MB downloaded", ct, pct);
+                    sinceReport = 0; lastReport = DateTime.UtcNow;
+                }
+            }
+            await ReportJobStateAsync(job, "running", $"{done / (1024 * 1024)} MB downloaded", ct,
+                AppCatalog.ProgressPercent(done, total) ?? 100);
+            return (true, null);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (HttpRequestException e) { return (false, $"download failed: {e.Message}"); }
+        catch (IOException e) { return (false, $"download write failed: {e.Message}"); }
+    }
+
+    /// <summary>install_app / update_app share this flow: vendor "always latest" installers upgrade
+    /// in place, so re-running the installer is the update. MSI URLs run through msiexec; the rest
+    /// execute directly with the catalog's silent switches.</summary>
+    private async Task<(bool Ok, string Detail)> InstallAppAsync(Job job, CancellationToken ct)
+    {
+        var entry = AppCatalog.Entry(job.Subject);
+        if (entry is null) return (false, $"app '{job.Subject}' not in venue catalog — refused");
+
+        var dir = Path.Combine(cfg.DataDir, "downloads");
+        Directory.CreateDirectory(dir);
+        var file = Path.Combine(dir, entry.Id + (AppCatalog.IsMsiUrl(entry.InstallerUrl) ? ".msi" : ".exe"));
+
+        var (ok, err) = await DownloadWithProgressAsync(entry.InstallerUrl, file, job, ct);
+        if (!ok) return (false, $"{entry.Name}: {err}");
+
+        await ReportJobStateAsync(job, "running", $"installing {entry.Name}…", ct);
+        var msi = AppCatalog.IsMsiUrl(entry.InstallerUrl);
+        var exe = msi ? "msiexec.exe" : file;
+        var args = msi
+            ? new List<string> { "/i", file, entry.Args, "/norestart" }.Where(a => a.Length > 0).ToList()
+            : entry.Args.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+        int exit; string? runErr = null;
+        try { exit = await RunProcessAsync(exe, args, TimeSpan.FromMinutes(cfg.JobTimeoutMin), ct); }
+        catch (Exception e) { runErr = e.Message; exit = -1; }
+        try { File.Delete(file); } catch (IOException) { }   // vendor installer is regenerable — never litter the machine with it
+        if (runErr != null) return (false, $"{entry.Name} installer could not run: {runErr}");
+        if (exit != 0) return (false, $"{entry.Name} installer exited {exit}");
+
+        AppVersionCache.Invalidate();   // next beat refetches latest + re-projects the apps node
+        return (true, $"{entry.Name} installed/updated (direct vendor download)");
     }
 
     // ---------- process helper (timeout + tree kill) ----------

@@ -129,6 +129,9 @@ public static class ServerRole
                     ws?["drift"]?.GetValue<bool>() ?? false,
                     ws?["expected_sha256"]?.GetValue<string>(),
                     ws?["actual_sha256"]?.GetValue<string>());
+                var apps = ms["apps"] as JsonArray;           // T29 venue-app verdicts (verbatim)
+                registry.SetApps(report.ClientId, apps?.ToJsonString());
+                registry.SetSelfUpdate(report.ClientId, (ms["selfUpdate"] as JsonObject)?.ToJsonString());
             }
             return Results.Json(new AckEnvelope(true), Wire.Options);
         });
@@ -174,6 +177,13 @@ public static class ServerRole
                 ? Results.Json(new AckEnvelope(true), Wire.Options)
                 : Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404));
 
+        // Operator-requested self-update check+apply (T30): one-shot self_update directive (TTL 5 min).
+        app.MapPost("/api/self-update/{clientId}", (string clientId) =>
+            registry.QueueDirective(clientId, new Directive("self_update", null,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 300))
+                ? Results.Json(new AckEnvelope(true), Wire.Options)
+                : Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404));
+
         // Operator-requested wallpaper re-sync: one-shot sync_wallpaper directive (TTL 5 min). The
         // agent re-verifies its content cache against the server manifest (re-downloading on sha
         // mismatch — heals even a corrupted cache) and re-applies the enforced image to the desktop.
@@ -182,6 +192,41 @@ public static class ServerRole
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 300))
                 ? Results.Json(new AckEnvelope(true), Wire.Options)
                 : Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404));
+
+        // T29: per-venue-app install/update. The agent direct-downloads the vendor installer from
+        // AppCatalog and streams progress onto the job; re-running a vendor "always latest"
+        // installer IS the update path, so install_app and update_app share one handler and differ
+        // only in the pre-flight guard below.
+        app.MapGet("/api/app-catalog", () => Results.Json(AppCatalog.All, Wire.Options));
+
+        Microsoft.AspNetCore.Http.IResult QueueAppJob(string clientId, string? appId, string kind)
+        {
+            var entry = AppCatalog.Entry(appId);
+            if (entry is null)
+                return Results.Json(new AckEnvelope(false, $"app '{appId}' not in venue catalog"), Wire.Options, statusCode: 400);
+            if (!registry.Exists(clientId))
+                return Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404);
+            var dev = registry.Snapshot().FirstOrDefault(x => x.ClientId == clientId);
+            if (kind == "update_app")
+            {
+                if (dev?.AppsJson is null)
+                    return Results.Json(new AckEnvelope(false, "device has never reported app state — install first"), Wire.Options, statusCode: 400);
+                var row = (JsonNode.Parse(dev.AppsJson) as JsonArray)?
+                    .FirstOrDefault(a => a?["app_id"]?.GetValue<string>() == entry.Id);
+                if (row?["installed"]?.GetValue<bool>() != true)
+                    return Results.Json(new AckEnvelope(false, $"{entry.Name} is not installed on this device — use install"), Wire.Options, statusCode: 400);
+            }
+            if (jobs.HasOpen(clientId, kind, entry.Id))
+                return Results.Json(new AckEnvelope(false, $"a {kind} job for {entry.Name} is already queued or running"), Wire.Options, statusCode: 409);
+
+            var job = jobs.Enqueue(clientId, kind, entry.Id, null, null);
+            _ = hub.PublishAsync(new Alert("job_queued", "info", $"{kind} {entry.Name}",
+                clientId, dev?.DevicePin, DateTimeOffset.UtcNow));
+            // AckEnvelope shape (not a bare Job): the Settings page and dashboard chips branch on `ok`.
+            return Results.Json(new AckEnvelope(true, Job: job), Wire.Options);
+        }
+        app.MapPost("/api/install-app/{clientId}", (string clientId, AppInstallRequest req) => QueueAppJob(clientId, req.AppId, "install_app"));
+        app.MapPost("/api/update-app/{clientId}", (string clientId, AppInstallRequest req) => QueueAppJob(clientId, req.AppId, "update_app"));
 
         app.MapPost("/api/print-label/{clientId}", (string clientId) =>
         {
@@ -360,7 +405,7 @@ public static class ServerRole
 
         app.MapPost("/api/job_update", (JobUpdateRequest req) =>
         {
-            var j = jobs.Update(req.JobId, req.ClientId, req.State, req.Detail);
+            var j = jobs.Update(req.JobId, req.ClientId, req.State, req.Detail, req.Progress);
             if (j is null)
                 return Results.Json(new AckEnvelope(false, "unknown job, wrong client, or terminal state"), Wire.Options, statusCode: 400);
             if (j.State is "succeeded" or "failed")
@@ -407,6 +452,8 @@ public static class ServerRole
                     wu_pending = e.WuPending,
                     wu_scan_min_ago = e.WuScanUnix is null ? (double?)null : Math.Round((now.ToUnixTimeSeconds() - e.WuScanUnix.Value) / 60.0, 1),
                     wallpaper_drift = e.WpDrift,
+                    apps = e.AppsJson is null ? null : JsonNode.Parse(e.AppsJson),
+                    self_update = e.SelfUpdateJson is null ? null : JsonNode.Parse(e.SelfUpdateJson),
                     games = sum?.GameCount,
                     duplicates = sum?.DuplicateCount,
                     agent_version = sum?.AgentVersion,

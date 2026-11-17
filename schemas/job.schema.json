@@ -26,6 +26,7 @@
     },
     "state": { "enum": ["queued", "running", "succeeded", "failed", "cancelled"] },
     "detail": { "type": ["string", "null"], "description": "human-readable result/error line" },
+    "progress": { "type": ["integer", "null"], "minimum": 0, "maximum": 100, "description": "install_app/update_app download percent (agent-streamed); null = indeterminate or not a progress-bearing kind" },
     "created_unix": { "type": "integer" },
     "started_unix": { "type": ["integer", "null"] },
     "finished_unix": { "type": ["integer", "null"] }

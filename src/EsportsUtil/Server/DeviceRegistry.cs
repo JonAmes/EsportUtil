@@ -27,6 +27,10 @@ public sealed class RegistryEntry
     public bool WpDrift { get; set; }
     public string? WpExpectedSha { get; set; }
     public string? WpActualSha { get; set; }
+    // Venue-app install verdicts (machine_state.apps, T29): raw JSON array kept verbatim so the
+    // dashboard/settings page render exactly what the agent reported. Null = never reported.
+    public string? AppsJson { get; set; }
+    public string? SelfUpdateJson { get; set; }
 
     [JsonIgnore] public List<Directive> PendingDirectives { get; set; } = new();
 
@@ -165,6 +169,30 @@ public sealed class DeviceRegistry
             if (!_devices.TryGetValue(clientId, out var e)) return;
             if (e.WpDrift == drift && e.WpExpectedSha == expectedSha && e.WpActualSha == actualSha) return;
             e.WpDrift = drift; e.WpExpectedSha = expectedSha; e.WpActualSha = actualSha;
+            Save();
+        }
+    }
+
+    /// <summary>Store the latest venue-app verdicts JSON (machine_state.apps) verbatim.</summary>
+    public void SetApps(string clientId, string? appsJson)
+    {
+        lock (_gate)
+        {
+            if (!_devices.TryGetValue(clientId, out var e)) return;
+            if (e.AppsJson == appsJson) return;
+            e.AppsJson = appsJson;
+            Save();
+        }
+    }
+
+    /// <summary>Store the latest self-update verdict JSON (machine_state.selfUpdate) verbatim.</summary>
+    public void SetSelfUpdate(string clientId, string? json)
+    {
+        lock (_gate)
+        {
+            if (!_devices.TryGetValue(clientId, out var e)) return;
+            if (e.SelfUpdateJson == json) return;
+            e.SelfUpdateJson = json;
             Save();
         }
     }

@@ -21,13 +21,20 @@ public sealed class EsportsConfig
     public bool AgentDashboard { get; set; } = true;             // agent role serves the client view on localhost
     public int AgentDashboardPort { get; set; } = 4310;          // loopback only; 0 = ephemeral (tests)
     public string SteamCmdPath { get; set; } = "steamcmd";       // agent-side updater executable (allow-listed handler only)
+    public bool SteamCmdAutoInstall { get; set; } = true;        // bootstrap missing steamcmd via winget (Valve.SteamCMD)
+    // ---- self-update (T30): agent pulls the latest GitHub release of itself and restarts ----
+    public int SelfUpdateCheckIntervalMin { get; set; } = 360;   // 0 disables timed checks (dashboard button still works)
+    public bool SelfUpdateApply { get; set; } = true;            // download+verify+restart when a newer release exists
+    public string GitHubRepo { get; set; } = "JonAmes/EsportUtil"; // releases/latest + esportsutil.exe asset
+    public bool TrayAutoStart { get; set; } = true;              // tray writes HKCU Run key: auto-loads at logon, no CLI
     public int JobTimeoutMin { get; set; } = 90;                 // per-job wall clock cap; running jobs past this + ack window are abandoned
     public Budget Budgets { get; set; } = new();
 
     public sealed class Budget
     {
         public double IdleCpuPercent { get; set; } = 1.0;
-        public int WorkingSetMb { get; set; } = 60;
+        public int WorkingSetMb { get; set; } = 64;   // was 60 at lifecycle phase (57.3 MB measured);
+                                                       // WU COM + SteamCMD + app catalog + self-update grew the floor
         public int TrayStubMb { get; set; } = 15;
     }
 

@@ -255,6 +255,7 @@ async function toggleDown(cid, on){
 }
 async function locate(cid){ await api('/api/locate/'+cid, {}); refresh(); }
 async function scanUpdates(cid){ await api('/api/scan-updates/'+cid, {}); refresh(); }
+async function selfUpdate(cid){ const r = await api('/api/self-update/'+cid, {}); if(r && r.ok===false) alert(r.error||'unknown device'); refresh(); }
 async function syncWallpaper(cid){ await api('/api/sync-wallpaper/'+cid, {}); refresh(); }
 
 let _devById = {};
@@ -294,8 +295,19 @@ async function fixJob(cid, kind, subjEnc){
   const subject = decodeURIComponent(subjEnc);
   const r = await api('/api/jobs', {client_id: cid, kind, subject});
   const el = document.getElementById('jobstat');
-  el.textContent = r.ok ? `job queued: ${kind} · ${subject} (${(r.job_id||'').slice(0,8)}) — agent picks it up on next heartbeat`
-                       : `job rejected: ${r.error || 'server error'}`;
+  const ok = r.ok === true || r.state === 'queued';   // /api/jobs answers with the bare Job on success
+  el.textContent = ok ? `job queued: ${kind} · ${subject} (${(r.job_id||'').slice(0,8)}) — agent picks it up on next heartbeat`
+                      : `job rejected: ${r.error || 'server error'}`;
+  el.style.color = ok ? 'var(--ok)' : 'var(--bad)';
+  refresh();
+}
+// T29: one outdated venue app → vendor installer pushed to that station only (progress rides the
+// job line above; the Settings page shows the full per-app progress bar).
+async function pushAppUpdate(cid, appId){
+  const r = await api('/api/update-app/' + cid, {app_id: appId});
+  const el = document.getElementById('jobstat');
+  el.textContent = r.ok ? `update queued: ${appId} (${(r.job?.job_id||'').slice(0,8)}) — direct vendor download, progress on the job line`
+                       : `update rejected: ${r.error || 'server error'}`;
   el.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
   refresh();
 }
@@ -347,7 +359,14 @@ async function refresh(){
         }).join('')
       : (dev.games ? '<span class="cchip ok">✓ in sync</span>' : '<span style="color:var(--mut)">—</span>');
     const jobs = (dev.jobs || []).slice(0,3).map(j =>
-      `<div class="jobline ${j.state}" title="${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}">${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}</div>`).join('');
+      `<div class="jobline ${j.state}" title="${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}">${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}${j.progress!=null?` · ${j.progress}%`:''}</div>`).join('');
+    // T30: the agent's own GitHub release, when newer: one chip pushes the self_update directive.
+    const suChip = dev.self_update && dev.self_update.state === 'update_available'
+      ? `<span class="cchip ung act" title="EsportsUtil ${esc(dev.self_update.current)} \u2192 ${esc(dev.self_update.latest)} on GitHub — click to push the release: the agent downloads it, verifies the digest, replaces its EXE, and restarts into the tray" onclick="selfUpdate('${dev.client_id}')">app ${esc(dev.self_update.current)} \u2192 ${esc(dev.self_update.latest)}</span>`
+      : '';
+    // T29: vendor-version-outdated apps get a red clickable chip → push update_app for that one app.
+    const appChips = (dev.apps || []).filter(a => a.up_to_date === false).map(a =>
+      `<span class="cchip ung act" title="${esc(a.app_id)} v${esc(a.version || '?')} is behind the vendor's current release — click to push the vendor installer update" onclick="pushAppUpdate('${dev.client_id}','${esc(a.app_id)}')">outdated ${esc(a.app_id)} ${esc(a.version || '')}</span>`).join('');
     return `<tr class="${dn?'downed':''}">
       <td><span class="dev"><span class="dot ${dotCls}"></span><a href="#" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`},${dev.location?`'${esc(dev.location)}'`:'null'});return false">${esc(dev.display_name)}${dev.pending?' <span class="sub2">(awaiting name)</span>':''}</a></span>
         ${dev.location?`<div class="sub2" style="margin-left:16px">${esc(dev.location)}</div>`:''}
@@ -355,7 +374,7 @@ async function refresh(){
       <td><span class="pill ${dev.online?'ok':'bad'} mono pinx" title="Revoke PIN ${esc(dev.device_pin)} and offboard this PC" onclick="offboard('${dev.client_id}')">${esc(dev.device_pin)}&nbsp;<span style="opacity:.5">✕</span></span></td>
       <td><div class="hb"><i style="width:${hbW}%;background:${hbC}"></i></div><div class="sub2 mono" style="margin-top:3px">${agoTxt}</div></td>
       <td class="mono">${dev.games ?? '—'}</td>
-      <td style="max-width:340px">${chips}${jobs}</td>
+      <td style="max-width:340px">${chips}${appChips}${suChip}${jobs}</td>
       <td>
         <span class="pill ${dn?'':up?'yel':'ok'}" ${dn?'hidden':''} title="${up?`${dev.wu_pending} Windows update${dev.wu_pending===1?'':'s'} pending — last poll ${wuAgo(dev.wu_scan_min_ago)}`:'Windows updates: none pending'}">${up?`${dev.wu_pending} update${dev.wu_pending===1?'':'s'}`:'active'}</span>
         <span class="pill dn" ${dn?'':'hidden'}>${dev.online?'downed':'downed · queued'}</span>

@@ -1,0 +1,32 @@
+name: build-release
+# GitHub builds the production Windows EXE and publishes it as a GitHub Release.
+# The agent's self-update (Core/SelfUpdate.cs) looks for the asset named esportsutil.exe
+# on the LATEST release of this repo — so the asset name here is a hard contract.
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build self-contained Windows EXE
+        run: VER="${GITHUB_REF_NAME#v}" ./deploy/publish-win.sh
+
+      - name: Publish GitHub release with the EXE
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/win-x64/esportsutil.exe \
+            --title "EsportsUtil $GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes "Self-contained win-x64 EXE (sha256: $(sha256sum dist/win-x64/esportsutil.exe | cut -d' ' -f1))"

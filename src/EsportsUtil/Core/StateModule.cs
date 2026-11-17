@@ -15,6 +15,7 @@ public static class StateModule
     public static JsonObject Record()
     {
         var (vendor, model) = MachineIdentity();
+        var installedApps = OperatingSystem.IsWindows() ? ReadInstalledApps() : new JsonArray();
         return new JsonObject
         {
             ["computerName"] = Environment.MachineName,
@@ -26,13 +27,19 @@ public static class StateModule
             ["startupItems"] = OperatingSystem.IsWindows() ? ReadStartupItems() : new JsonArray(),
             ["screensaver"] = OperatingSystem.IsWindows() ? ReadScreensaver() : null,
             ["wallpaper"] = OperatingSystem.IsWindows() ? ReadWallpaper() : null,
-            ["installedApps"] = OperatingSystem.IsWindows() ? ReadInstalledApps() : new JsonArray(),
+            ["installedApps"] = installedApps,
+            // Venue-app install/up-to-date verdicts (T29 catalog): one row per installable app.
+            ["apps"] = AppCatalog.ToNode(AppCatalog.Statuses(installedApps, AppVersionCache.LatestOf,
+                AppVersionCache.FetchedUnix)),
             // Last Windows Update poll outcome (agent loop owns the cadence; the record embeds the
             // cache). Key absent until the first poll — the server pill then stays plain green.
             ["windowsUpdate"] = UpdateWatch.Last?.ToNode(),
             // Wallpaper drift verdict vs the enforced target (agent loop checks every beat). Key
             // absent while nothing is enforced — the user owns the desktop then.
             ["wallpaperSync"] = WallpaperWatch.Last?.ToNode(),
+            // SteamCMD presence + winget bootstrap verdict (agent loop owns the cadence).
+            ["steamCmd"] = SteamCmdWatch.Last?.ToNode(),
+            ["selfUpdate"] = SelfUpdateWatch.Last?.ToNode(),
         };
     }
 

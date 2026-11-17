@@ -4,7 +4,8 @@ using EsportsUtil.Server;
 using Microsoft.AspNetCore.Builder;
 
 string? roleFlag = null;
-string? configPath = null, foundConfig = null, serviceNameFlag = null;
+string? configPath = null, foundConfig = null, serviceNameFlag = null, finalizeTarget = null;
+int parentPidFlag = -1;
 bool overlayMode = false, downedOverlayMode = false, trayFlag = false, serviceFlag = false;
 var rawArgs = new List<string>(args);
 for (int i = 0; i < args.Length; i++)
@@ -17,7 +18,16 @@ for (int i = 0; i < args.Length; i++)
         case "--tray": trayFlag = true; break;
         case "--service": serviceFlag = true; break;
         case "--name" when i + 1 < args.Length: serviceNameFlag = args[++i]; break;
+        case SelfUpdateWatch.FinalizeFlag when i + 1 < args.Length: finalizeTarget = args[++i]; break;
+        case "--ppid" when i + 1 < args.Length: parentPidFlag = int.TryParse(args[++i], out var pp) ? pp : -1; break;
     }
+
+// Double-click, not CLI (T30): a Windows foreground start with no explicit host flag and no
+// same-EXE child duty (overlay/downed-overlay/handoff) lands in the tray — "the app loads into
+// tray mode automatically". Console/Linux behavior is unchanged.
+if (roleFlag is null && !trayFlag && !serviceFlag && !overlayMode && !downedOverlayMode
+    && finalizeTarget is null && OperatingSystem.IsWindows())
+    trayFlag = true;
 
 // Ops verbs never start a role loop: service install/remove/start/stop/status, autostart enable/disable/status.
 var lifecycle = Lifecycle.Parse(args, trayFlag, serviceFlag, serviceNameFlag);
@@ -78,6 +88,11 @@ if (downedOverlayMode)
     return 0;
 }
 
+// Self-update handoff (T30): we ARE the staged new EXE — wait out the old process,
+// replace its path, relaunch it in tray mode, exit.
+if (finalizeTarget is not null)
+    return await SelfUpdateWatch.FinalizeAsync(finalizeTarget, parentPidFlag);
+
 EsportsConfig cfg;
 foundConfig = configPath ?? FirstRunSetup.FindConfigFile();
 if (foundConfig is null && roleFlag is null && lifecycle.Mode != RunMode.Service)
@@ -122,7 +137,11 @@ switch (lifecycle.Mode)
 {
     case RunMode.Tray:
 #if WINDOWS
-        if (OperatingSystem.IsWindows()) return TrayApp.Run(cfg);
+        if (OperatingSystem.IsWindows())
+        {
+            if (cfg.TrayAutoStart) EnsureRunKey();   // auto-load at logon — one less CLI dependency ever
+            return TrayApp.Run(cfg);
+        }
 #endif
         Console.Error.WriteLine("--tray is Windows-only (no tray surface on this OS) — run the console foreground loop instead.");
         return 2;
@@ -143,6 +162,23 @@ switch (lifecycle.Mode)
         await RoleRunner.RunAsync(cfg, cts.Token);
         return 0;
 }
+
+#if WINDOWS
+// Idempotent HKCU Run write (same value as `autostart enable`) so a logon always brings the
+// tray agent back — the venue PC never needs anyone to launch esportsutil by hand.
+static void EnsureRunKey()
+{
+    var exe = Environment.ProcessPath;
+    if (exe is null) return;
+    try
+    {
+        using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(Lifecycle.RunKeyPath);
+        if (key?.GetValue(Lifecycle.RunValueName) as string != Lifecycle.RunKeyValue(exe))
+            key?.SetValue(Lifecycle.RunValueName, Lifecycle.RunKeyValue(exe));
+    }
+    catch (Exception e) { Console.Error.WriteLine($"autostart Run key write failed: {e.Message}"); }
+}
+#endif
 
 static (string role, string? url)? ConsoleSetupWizard()
 {

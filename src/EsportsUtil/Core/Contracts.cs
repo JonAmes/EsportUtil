@@ -63,10 +63,12 @@ public sealed record Job(
     string? Detail = null,
     long CreatedUnix = 0,
     long? StartedUnix = null,
-    long? FinishedUnix = null);
+    long? FinishedUnix = null,
+    int? Progress = null);          // 0–100 for streaming installs; null = indeterminate
 
 public sealed record NewJobRequest(string ClientId, string Kind, string Subject);
-public sealed record JobUpdateRequest(string JobId, string ClientId, string State, string? Detail = null);
+public sealed record JobUpdateRequest(string JobId, string ClientId, string State, string? Detail = null, int? Progress = null);
+public sealed record AppInstallRequest(string AppId);   // T29: install_app / update_app subject selector
 
 public sealed record DownedRequest(
     string ClientId,
