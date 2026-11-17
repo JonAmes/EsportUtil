@@ -95,7 +95,7 @@ async Task<bool> PostAck(string path, object body) =>
 
 var agentDir = Path.Combine(tmp, "agent");
 var agCfg = new EsportsConfig { Role = "agent", ServerUrl = srvUrl, DataDir = agentDir };
-agCfg.HeartbeatIntervalSec = 1; agCfg.SlowScanIntervalMin = 0;
+agCfg.HeartbeatIntervalSec = 1; agCfg.SlowScanIntervalMin = 0; agCfg.UpdateScanIntervalMin = 0;  // timer scans off: WU polls only via explicit T25 wiring (keeps report-hash dedupe tests deterministic)
 agCfg.ScanDirs = new List<string> { rootA, rootB };
 using var cts = new CancellationTokenSource();
 var loop = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(5) }, agCfg);
@@ -308,7 +308,7 @@ var srvCfg2 = new EsportsConfig { Role = "server", ServerUrl = srvUrl2, DataDir 
 using var app2 = ServerRole.BuildApp(srvCfg2); await app2.StartAsync();
 using var probe2 = new HttpClient { BaseAddress = new Uri(srvUrl2), Timeout = TimeSpan.FromSeconds(5) };
 var agCfg2 = new EsportsConfig { Role = "agent", ServerUrl = srvUrl2, DataDir = Path.Combine(tmp, "agent2") };
-agCfg2.HeartbeatIntervalSec = 1; agCfg2.SlowScanIntervalMin = 0; agCfg2.ScanDirs = new List<string> { rootA, rootB };
+agCfg2.HeartbeatIntervalSec = 1; agCfg2.SlowScanIntervalMin = 0; agCfg2.UpdateScanIntervalMin = 0; agCfg2.ScanDirs = new List<string> { rootA, rootB };
 using var cts2 = new CancellationTokenSource();
 var loop2 = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(5) }, agCfg2);
 var loopTask2 = loop2.RunAsync(cts2.Token);
@@ -407,7 +407,7 @@ using var app4 = ServerRole.BuildApp(srvCfg4); await app4.StartAsync();
 using var probe4 = new HttpClient { BaseAddress = new Uri(srvUrl4), Timeout = TimeSpan.FromSeconds(5) };
 var agentDir4 = Path.Combine(tmp, "agent4");
 var agCfg4 = new EsportsConfig { Role = "agent", ServerUrl = srvUrl4, DataDir = agentDir4 };
-agCfg4.HeartbeatIntervalSec = 1; agCfg4.SlowScanIntervalMin = 0; agCfg4.ScanDirs = new List<string> { rootA, rootB };
+agCfg4.HeartbeatIntervalSec = 1; agCfg4.SlowScanIntervalMin = 0; agCfg4.UpdateScanIntervalMin = 0; agCfg4.ScanDirs = new List<string> { rootA, rootB };
 agCfg4.SteamCmdPath = Path.Combine(tmp, "no-such-steamcmd");   // deterministic failure: updater absent on dev box
 using var cts4 = new CancellationTokenSource();
 var loop4 = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }, agCfg4);
@@ -747,6 +747,55 @@ using (var apiW = JsonDocument.Parse(await setProbe.GetStringAsync("/api/setting
         && !File.Exists(Path.Combine(setCfg.DataDir, "content", "venue-wallpaper.png")),
         "T24i delete removes item+file, second delete 404, /api/settings reports none + 8 MB cap");
 
+// ---------- T25: Windows Update polling — timed interval AND operator-requested → report → registry → pill ----------
+Environment.SetEnvironmentVariable(UpdateWatch.FakeEnvVar, "3");   // cross-OS scan seam (PLAN: real WUA is a Windows gate)
+Check(UpdateWatch.Due(1000, null, 360, false, false) && UpdateWatch.Due(1000, 1000 - 360 * 60, 360, false, false)
+    && !UpdateWatch.Due(1000, 1000 - 359 * 60, 360, false, false) && !UpdateWatch.Due(1000, null, 0, false, false)
+    && UpdateWatch.Due(1000, null, 0, false, true) && !UpdateWatch.Due(1000, null, 360, true, true),
+    "T25a Due(): never-scanned due; interval lapsed due; fresh scan not; timer-off only scans on request; in-flight scan blocks re-entry");
+await UpdateWatch.ScanAsync();
+Check(UpdateWatch.Last is { Status: "updates", PendingCount: 3 } && UpdateWatch.Last!.LastScanUnix > 0,
+    "T25b fake scan (ESU_FAKE_UPDATES=3) yields 'updates'/3 with a fresh scan timestamp");
+var t25Rec = StateModule.Record();
+Check(t25Rec["windowsUpdate"]?["pending_count"]?.GetValue<int>() == 3
+    && t25Rec["windowsUpdate"]!["status"]!.GetValue<string>() == "updates",
+    "T25c State Module embeds the cached windowsUpdate summary into machine_state (single writer)");
+Environment.SetEnvironmentVariable(UpdateWatch.FakeEnvVar, null);
+await UpdateWatch.ScanAsync();
+Check(OperatingSystem.IsWindows() || (UpdateWatch.Last!.Status == "unsupported" && UpdateWatch.Last!.PendingCount is null),
+    "T25d no fake hook on a non-Windows box → 'unsupported', never throws");
+
+// live pair: directive-requested poll and timer poll both flow agent → report → registry → /api/state
+var srvUrl5 = "http://127.0.0.1:4399"; var srvDir5 = Path.Combine(tmp, "srv5");
+var srvCfg5 = new EsportsConfig { Role = "server", ServerUrl = srvUrl5, DataDir = srvDir5 };
+using var app5 = ServerRole.BuildApp(srvCfg5); await app5.StartAsync();
+using var probe5 = new HttpClient { BaseAddress = new Uri(srvUrl5), Timeout = TimeSpan.FromSeconds(5) };
+var agCfg5 = new EsportsConfig { Role = "agent", ServerUrl = srvUrl5, DataDir = Path.Combine(tmp, "agent5") };
+agCfg5.HeartbeatIntervalSec = 1; agCfg5.SlowScanIntervalMin = 0; agCfg5.UpdateScanIntervalMin = 0;   // timer driven explicitly below
+agCfg5.ScanDirs = new List<string> { rootA };
+using var cts5 = new CancellationTokenSource();
+var loopTask5 = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }, agCfg5).RunAsync(cts5.Token);
+string cid5 = "";
+await Until(async () => { cid5 = (await State5()).devices.FirstOrDefault()?.client_id ?? ""; return cid5.Length > 0; }, 20);
+async Task<JsonDoc> State5() => Wire.FromJson<JsonDoc>(await probe5.GetStringAsync("/api/state"))!;
+var t25Nope = await probe5.PostAsync("/api/scan-updates/nope", new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+Environment.SetEnvironmentVariable(UpdateWatch.FakeEnvVar, "5");
+var t25Req = await probe5.PostAsync($"/api/scan-updates/{cid5}", new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+Check((int)t25Nope.StatusCode == 404 && (int)t25Req.StatusCode == 200
+    && await Until(async () => { var d = (await State5()).devices.First(x => x.client_id == cid5); return d.wu_pending == 5 && d.wu_status == "updates"; }, 15),
+    "T25e operator-requested poll: /api/scan-updates queues a scan_updates directive (unknown device 404); agent scans on its beat and wu_pending/status land on /api/state");
+agCfg5.UpdateScanIntervalMin = 1;   // live config object — the loop re-reads the cadence each beat
+Environment.SetEnvironmentVariable(UpdateWatch.FakeEnvVar, "7");
+UpdateWatch.Reset();                // never-scanned again → timer Due fires with NO request in flight
+Check(await Until(async () => (await State5()).devices.First(x => x.client_id == cid5).wu_pending == 7, 15),
+    "T25f timed-interval poll: with interval lapsed and nothing requested, the loop re-polls on its own beat and the new count flows to /api/state");
+Environment.SetEnvironmentVariable(UpdateWatch.FakeEnvVar, null); UpdateWatch.Reset();
+var t25Dash = await probe5.GetStringAsync("/");
+Check(t25Dash.Contains(".pill.yel") && t25Dash.Contains("#eab308") && t25Dash.Contains("animation:pulse")
+    && t25Dash.Contains("/api/scan-updates/") && t25Dash.Contains("wu_pending") && t25Dash.Contains("scanUpdates("),
+    "T25g dashboard markup: yellow (#eab308) pulsing state pill on wu_pending>0 + per-device scan-updates wiring");
+cts5.Cancel(); await loopTask5; await app5.StopAsync();
+
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
 return failed;
@@ -769,7 +818,7 @@ static bool Throws<T>(Action a) where T : Exception
 
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
-file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null);
+file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null);
 
 /// <summary>Fake sticky-overlay child for T21: Alive flips when staff "bypasses" on the machine;
 /// WasKilled records the operator-driven clear. The agent loop supervises this handle each ack.</summary>

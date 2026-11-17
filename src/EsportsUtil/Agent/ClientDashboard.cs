@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json.Nodes;
 using EsportsUtil.Core;
 
 namespace EsportsUtil.Agent;
@@ -27,7 +28,8 @@ public sealed record LocalStatus(
     string? MachineModel,
     List<GameReport> Games,
     List<DuplicateReport> Duplicates,
-    List<Job> RecentJobs);
+    List<Job> RecentJobs,
+    JsonNode? WindowsUpdate);               // machine_state.windowsUpdate passthrough; null = never polled
 
 /// <summary>The client operator view (PLAN.md: agent role serves it from a small localhost listener,
 /// default port 4310). Loopback-only: this PC's own browser — the fleet view stays on the server.
@@ -125,6 +127,8 @@ public sealed class ClientDashboard
             loop.LastReportAt, loop.ReportsSent, loop.LastReportHash,
             rep?.MachineState?["machineModel"]?.GetValue<string>(),
             rep?.GameReports ?? new(), rep?.Duplicates ?? new(),
-            loop.RecentJobs.ToList());
+            loop.RecentJobs.ToList(),
+            // detached copy — a JsonNode can't be re-parented into the status object directly
+            rep?.MachineState?["windowsUpdate"] is JsonObject wuNode ? JsonNode.Parse(wuNode.ToJsonString()) : null);
     }
 }

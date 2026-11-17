@@ -11,7 +11,7 @@
 --bg:#0d0f14;--fg:#f7f8f8;--mut:#8a8f98;--acc:#6d8dff;
 --bdr:rgba(255,255,255,.08);--card:rgba(255,255,255,.03);
 --hair:color-mix(in srgb,var(--fg) 7%,transparent);
---ok:#10b981;--warn:#d97706;--bad:#ef4444;--info:#38bdf8;}
+--ok:#10b981;--warn:#d97706;--bad:#ef4444;--info:#38bdf8;--yel:#eab308;}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:
  radial-gradient(120% 90% at 85% -10%,rgba(27,20,48,.55),transparent 60%),
@@ -68,11 +68,13 @@ tbody tr:hover{background:color-mix(in srgb,var(--fg) 4%,transparent)}
 .sub2{color:var(--mut);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
 td:first-child{min-width:240px}
 .dev a{white-space:nowrap}
-.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:510;border:1px solid var(--bdr)}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:510;border:1px solid var(--bdr);white-space:nowrap}
 .pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 35%,transparent);background:color-mix(in srgb,var(--ok) 8%,transparent)}
 .pill.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent);background:color-mix(in srgb,var(--warn) 8%,transparent)}
 .pill.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent)}
 .pill.info{color:var(--info);border-color:color-mix(in srgb,var(--info) 35%,transparent);background:color-mix(in srgb,var(--info) 8%,transparent)}
+/* Windows updates pending: state pill goes yellow and pulsing */
+.pill.yel{color:var(--yel);border-color:color-mix(in srgb,var(--yel) 40%,transparent);background:color-mix(in srgb,var(--yel) 10%,transparent);animation:pulse 1.3s infinite}
 .btn{border:1px solid var(--bdr);background:color-mix(in srgb,var(--fg) 4%,transparent);color:var(--fg);border-radius:6px;padding:4px 11px;font-size:12px;font-weight:510;cursor:pointer;transition:all .15s}
 .btn.danger:hover{border-color:#f87171;color:#f87171;background:color-mix(in srgb,#f87171 8%,transparent)}
 .pinx{cursor:pointer}
@@ -228,6 +230,7 @@ async function toggleDown(cid, on){
   refresh();
 }
 async function locate(cid){ await api('/api/locate/'+cid, {}); refresh(); }
+async function scanUpdates(cid){ await api('/api/scan-updates/'+cid, {}); refresh(); }
 
 let _devById = {};
 async function offboard(cid){
@@ -289,6 +292,8 @@ async function refresh(){
     const hbW = ago === null ? 4 : Math.max(6, Math.round(100 * (1 - ago / 120)));
     const hbC = !dev.online ? 'var(--bad)' : ago > 60 ? 'var(--warn)' : 'var(--ok)';
     const dn = dev.desired_state === 'downed';
+    const up = (dev.wu_pending || 0) > 0;
+    const wuAgo = m => m === null || m === undefined ? '—' : m < 1 ? 'just now' : m < 60 ? Math.round(m) + 'm ago' : (m / 60).toFixed(1) + 'h ago';
     const dupNote = dev.duplicates ? `<div class="sub2">${dev.duplicates} duplicate game id(s) awaiting server resolution</div>` : '';
     const kindCls = {update_required:'up', rollback_required:'rb', missing_from_machine:'mi', unmanaged_game:'ung', unapproved_app:'un', duplicate_resolved:'up'};
     const kindLbl = {update_required:'↑', rollback_required:'↓', missing_from_machine:'＋', unmanaged_game:'?', unapproved_app:'⚠', duplicate_resolved:'dup'};
@@ -309,13 +314,14 @@ async function refresh(){
       <td class="mono">${dev.games ?? '—'}</td>
       <td style="max-width:340px">${chips}${jobs}</td>
       <td>
-        <span class="pill ${dn?'':'ok'}" ${dn?'hidden':''}>active</span>
+        <span class="pill ${dn?'':up?'yel':'ok'}" ${dn?'hidden':''} title="${up?`${dev.wu_pending} Windows update${dev.wu_pending===1?'':'s'} pending — last poll ${wuAgo(dev.wu_scan_min_ago)}`:'Windows updates: none pending'}">${up?`${dev.wu_pending} update${dev.wu_pending===1?'':'s'}`:'active'}</span>
         <span class="pill dn" ${dn?'':'hidden'}>${dev.online?'downed':'downed · queued'}</span>
       </td>
       <td class="swcell"><span class="sw" role="switch" aria-checked="${dn}" title="${dev.online?'toggle downed state (swaps out-of-service wallpaper on the PC)':'agent unreachable — downed state is stored and will be applied when it returns'}" onclick="toggleDown('${dev.client_id}', !${dn})"></span></td>
       <td>
         <button class="btn" ${dev.online?'':'disabled'} onclick="locate('${dev.client_id}')">locate</button>
         <button class="btn" onclick="printLabel('${dev.client_id}')">label</button>
+        <button class="btn" ${dev.online?'':'disabled'} title="Poll Windows Update now — the agent scans on its next beat and the result rides its next report (timed polls run on their own interval)" onclick="scanUpdates('${dev.client_id}')">updates</button>
         <button class="btn danger" title="Offboard this PC — remove it from the fleet and revoke its PIN" onclick="offboard('${dev.client_id}')">&#128465;</button>
       </td>
     </tr>`;

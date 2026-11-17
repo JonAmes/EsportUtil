@@ -218,9 +218,27 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                                     else
                                         Console.WriteLine($"locate directive expired in transit — overlay suppressed");
                                 }
+                                else if (d.Type == "scan_updates")
+                                {
+                                    UpdateWatch.RequestScan();
+                                    Console.WriteLine("scan_updates directive → Windows Update poll requested");
+                                }
                                 else
                                     Console.WriteLine($"directive '{d.Type}' received (expires {d.ExpiresUnix})");
                         }
+                        // Windows Update polling: timed interval AND operator-requested directives.
+                        // Fire-and-forget on its own task — a slow WUA search never stalls the
+                        // heartbeat spine; a finished poll forces a prompt report so the summary
+                        // (and the dashboard state pill) reflects it within seconds, not a slow tick.
+                        if (UpdateWatch.Due(DateTimeOffset.UtcNow.ToUnixTimeSeconds(), UpdateWatch.Last?.LastScanUnix,
+                                cfg.UpdateScanIntervalMin, UpdateWatch.IsScanning, UpdateWatch.HasRequestedScan))
+                            _ = UpdateWatch.ScanAsync(ct).ContinueWith(_ =>
+                            {
+                                var wu = UpdateWatch.Last;
+                                var pend = wu?.PendingCount is int p ? $" ({p} pending)" : "";
+                                Console.WriteLine($"windows-update poll → {wu?.Status}{pend}");
+                                _reportNow = DateTime.UtcNow;
+                            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
                         if (ack.Job is { } job)
                         {
                             Console.WriteLine($"job {job.Kind} '{job.Subject}' started ({job.JobId[..8]})");

@@ -27,6 +27,9 @@ public static class StateModule
             ["screensaver"] = OperatingSystem.IsWindows() ? ReadScreensaver() : null,
             ["wallpaper"] = OperatingSystem.IsWindows() ? ReadWallpaper() : null,
             ["installedApps"] = OperatingSystem.IsWindows() ? ReadInstalledApps() : new JsonArray(),
+            // Last Windows Update poll outcome (agent loop owns the cadence; the record embeds the
+            // cache). Key absent until the first poll — the server pill then stays plain green.
+            ["windowsUpdate"] = UpdateWatch.Last?.ToNode(),
         };
     }
 

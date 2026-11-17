@@ -117,6 +117,14 @@ public static class ServerRole
                 return Results.Json(new AckEnvelope(true, Error: null, "unchanged"), Wire.Options);
             manifests.SaveReport(report, hash);
             registry.UpdateModel(report.ClientId, report.MachineState?["machineModel"]?.GetValue<string>());
+            if (report.MachineState is JsonObject ms)
+            {
+                var wu = ms["windowsUpdate"] as JsonObject;   // null = never polled — clears stale values
+                registry.SetUpdateState(report.ClientId,
+                    wu?["status"]?.GetValue<string>(),
+                    wu?["pending_count"]?.GetValue<int?>(),
+                    wu?["last_scan_unix"]?.GetValue<long?>());
+            }
             return Results.Json(new AckEnvelope(true), Wire.Options);
         });
 
@@ -150,6 +158,14 @@ public static class ServerRole
         app.MapPost("/api/locate/{clientId}", (string clientId) =>
             registry.QueueDirective(clientId, new Directive("locate", registry.DisplayNameOf(clientId),
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds() + cfg.LocateTtlSec))
+                ? Results.Json(new AckEnvelope(true), Wire.Options)
+                : Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404));
+
+        // Operator-requested Windows Update poll: one-shot scan_updates directive (TTL 5 min); the
+        // agent polls WUA on the next beat and the fresh summary rides its next report.
+        app.MapPost("/api/scan-updates/{clientId}", (string clientId) =>
+            registry.QueueDirective(clientId, new Directive("scan_updates", null,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 300))
                 ? Results.Json(new AckEnvelope(true), Wire.Options)
                 : Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404));
 
@@ -373,6 +389,9 @@ public static class ServerRole
                     downed_content_id = e.DownedContentId,
                     downed_reason = e.DownedReason,
                     machine_model = e.MachineModel,
+                    wu_status = e.WuStatus,
+                    wu_pending = e.WuPending,
+                    wu_scan_min_ago = e.WuScanUnix is null ? (double?)null : Math.Round((now.ToUnixTimeSeconds() - e.WuScanUnix.Value) / 60.0, 1),
                     games = sum?.GameCount,
                     duplicates = sum?.DuplicateCount,
                     agent_version = sum?.AgentVersion,

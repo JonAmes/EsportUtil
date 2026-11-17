@@ -14,6 +14,7 @@ public sealed class EsportsConfig
     public int HeartbeatIntervalSec { get; set; } = 10;
     public int HeartbeatTimeoutSec { get; set; } = 120;
     public int SlowScanIntervalMin { get; set; } = 15;           // never scan per-heartbeat
+    public int UpdateScanIntervalMin { get; set; } = 360;        // Windows Update poll cadence; 0 = timer off (directives still work)
     public int LocateTtlSec { get; set; } = 30;
     public string Printer { get; set; } = "";                    // named Windows queue; "" = file fallback
     public bool ToastNotifications { get; set; } = true;         // Windows toast on the server box (Phase 3)

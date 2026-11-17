@@ -22,6 +22,9 @@
       "description": "Content Library wallpaper displayed while this machine is downed; null = venue default downed wallpaper."
     },
     "downed_reason": { "type": ["string", "null"], "description": "Operator note (maintenance, reserved, event staging); shown on the dashboard." },
+    "wu_status": { "type": ["string", "null"], "enum": ["ok", "updates", "error", "unsupported", null], "description": "Last Windows Update poll outcome reported by this agent (timed interval or operator-requested scan_updates directive); null = never polled." },
+    "wu_pending": { "type": ["integer", "null"], "minimum": 0, "description": "Non-installed WUA updates at last poll; the dashboard state pill goes yellow and pulses when > 0." },
+    "wu_scan_unix": { "type": ["integer", "null"], "description": "Unix seconds of the last Windows Update poll." },
     "notes": { "type": "string" }
   },
   "additionalProperties": false

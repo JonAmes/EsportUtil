@@ -18,6 +18,10 @@ public sealed class RegistryEntry
     public string? DownedContentId { get; set; }
     public string? DownedReason { get; set; }
     public string? Notes { get; set; }
+    // Last Windows Update summary reported by this agent (ingested from machine_state.windowsUpdate).
+    public string? WuStatus { get; set; }        // ok | updates | error | unsupported
+    public int? WuPending { get; set; }
+    public long? WuScanUnix { get; set; }
 
     [JsonIgnore] public List<Directive> PendingDirectives { get; set; } = new();
 
@@ -131,6 +135,19 @@ public sealed class DeviceRegistry
             if (!_devices.TryGetValue(clientId, out var e)) return false;
             e.PendingDirectives.Add(directive);
             return true;
+        }
+    }
+
+    /// <summary>Store the latest Windows Update summary from an accepted report (a null summary
+    /// clears stale values when an older agent re-reports without the section).</summary>
+    public void SetUpdateState(string clientId, string? status, int? pending, long? scanUnix)
+    {
+        lock (_gate)
+        {
+            if (!_devices.TryGetValue(clientId, out var e)) return;
+            if (e.WuStatus == status && e.WuPending == pending && e.WuScanUnix == scanUnix) return;
+            e.WuStatus = status; e.WuPending = pending; e.WuScanUnix = scanUnix;
+            Save();
         }
     }
 
