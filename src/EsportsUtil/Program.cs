@@ -3,7 +3,7 @@ using EsportsUtil.Core;
 using EsportsUtil.Server;
 
 string? roleFlag = null;
-string? configPath = null;
+string? configPath = null, foundConfig = null;
 bool overlayMode = false;
 var rawArgs = new List<string>(args);
 for (int i = 0; i < args.Length; i++)
@@ -38,8 +38,34 @@ if (overlayMode)
     return 0;
 }
 
-var cfg = EsportsConfig.Load(configPath ?? FindDefaultConfig());
-cfg.ApplyRoleOverride(roleFlag);
+EsportsConfig cfg;
+foundConfig = configPath ?? FirstRunSetup.FindConfigFile();
+if (foundConfig is null && roleFlag is null)
+{
+    // First run: ask the operator instead of defaulting to a silent localhost agent
+    // (the classic "PC never shows up on the dashboard" trap).
+    Console.WriteLine("No esportsutil.config.json found — starting first-run setup.");
+    (string role, string? url)? picked = null;
+#if WINDOWS
+    if (OperatingSystem.IsWindows())
+        picked = FirstRunDialog.Run();
+    else
+#endif
+        picked = ConsoleSetupWizard();
+    if (picked is null)
+    {
+        Console.WriteLine("setup cancelled — no config written, exiting.");
+        return 3;
+    }
+    cfg = FirstRunSetup.BuildConfig(picked.Value.role, picked.Value.url, FirstRunSetup.ConfigHomeDir());
+    var written = FirstRunSetup.WriteConfig(FirstRunSetup.ConfigHomeDir(), cfg);
+    Console.WriteLine($"wrote {written} — this PC will run as {cfg.Role}.");
+}
+else
+{
+    cfg = EsportsConfig.Load(foundConfig);
+    cfg.ApplyRoleOverride(roleFlag);
+}
 Directory.CreateDirectory(cfg.DataDir);
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
@@ -53,8 +79,22 @@ else
 }
 return 0;
 
-static string? FindDefaultConfig()
+static (string role, string? url)? ConsoleSetupWizard()
 {
-    var beside = Path.Combine(AppContext.BaseDirectory, "esportsutil.config.json");
-    return File.Exists(beside) ? beside : File.Exists("esportsutil.config.json") ? "esportsutil.config.json" : null;
+    Console.WriteLine("What should this PC run?");
+    Console.WriteLine("  1 = SERVER  (venue control machine — dashboard + fleet jobs)");
+    Console.WriteLine("  2 = AGENT   (game PC — reports to the server)");
+    Console.Write("choice [1/2, or blank to cancel]: ");
+    var choice = Console.ReadLine()?.Trim();
+    if (choice is not ("1" or "2")) return null;
+    if (choice == "1") return ("server", null);
+    while (true)
+    {
+        Console.Write("server address (IP or http://host:port, blank to cancel): ");
+        var input = Console.ReadLine();
+        if (string.IsNullOrWhiteSpace(input)) return null;
+        var url = FirstRunSetup.NormalizeServerUrl(input);
+        if (url is not null) return ("agent", url);
+        Console.WriteLine("  that doesn't look like an address — try 10.140.0.212 or http://host:4300");
+    }
 }

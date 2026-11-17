@@ -374,6 +374,37 @@ foreach (var (tw, th) in new[] { (1920, 1080), (1280, 720), (3840, 2160), (1366,
         $"T16b {tw}x{th}: oversized display_name shrinks to fit 80% width (never clips)");
 }
 
+// ---- first-run setup: role dialog / config generation ----
+Check(FirstRunSetup.NormalizeServerUrl("10.140.0.212") == "http://10.140.0.212:4300" &&
+    FirstRunSetup.NormalizeServerUrl(" 10.140.0.212:4300 ") == "http://10.140.0.212:4300" &&
+    FirstRunSetup.NormalizeServerUrl("venue.local") == "http://venue.local:4300" &&
+    FirstRunSetup.NormalizeServerUrl("http://venue.local:4301/") == "http://venue.local:4301" &&
+    FirstRunSetup.NormalizeServerUrl("https://100.92.77.66:4300") == "https://100.92.77.66:4300",
+    "T17a bare IP gets http scheme + default port, full URLs kept, trailing slash dropped");
+Check(FirstRunSetup.NormalizeServerUrl(null) is null && FirstRunSetup.NormalizeServerUrl("  ") is null &&
+    FirstRunSetup.NormalizeServerUrl("bad host!") is null && FirstRunSetup.NormalizeServerUrl("http://") is null &&
+    FirstRunSetup.NormalizeServerUrl("1.2.3.4:99999") is null,
+    "T17b empty/junk/malformed address never produces a config");
+{
+    var setupDir = Path.Combine(tmp, "first-run");
+    var srv = FirstRunSetup.BuildConfig("server", null, setupDir);
+    var ag = FirstRunSetup.BuildConfig("agent", "10.140.0.212", setupDir);
+    Check(srv.Role == "server" && srv.DataDir == Path.Combine(setupDir, "esportsutil-data", "server") && srv.Port == 4300 &&
+        ag.Role == "agent" && ag.ServerUrl == "http://10.140.0.212:4300" &&
+        ag.DataDir == Path.Combine(setupDir, "esportsutil-data", "agent"),
+        "T17c server keeps defaults + local data dir; agent gets normalized server_url");
+    Check(Throws<ArgumentException>(() => FirstRunSetup.BuildConfig("client", null, setupDir)) &&
+        Throws<ArgumentException>(() => FirstRunSetup.BuildConfig("agent", "not a url", setupDir)),
+        "T17d wizard output is validated, not trusted (bad role/address throw)");
+    var written = FirstRunSetup.WriteConfig(setupDir, ag);
+    var cfgBack = EsportsConfig.Load(written);
+    var text = File.ReadAllText(written);
+    Check(Path.GetFileName(written) == "esportsutil.config.json" &&
+        cfgBack.Role == "agent" && cfgBack.ServerUrl == "http://10.140.0.212:4300" &&
+        cfgBack.DataDir == ag.DataDir && text.Contains("\"server_url\""),
+        "T17e generated file next to the exe round-trips through EsportsConfig.Load (same snake_case contract)");
+}
+
 // ---------- T11: resource budget gate (PLAN.md) — standalone agent, idle ----------
 var perfSecs = int.TryParse(Environment.GetEnvironmentVariable("PERF_SECS"), out var ps) ? ps : 20;
 var agentBin = Path.Combine(AppContext.BaseDirectory, "esportsutil.dll");
