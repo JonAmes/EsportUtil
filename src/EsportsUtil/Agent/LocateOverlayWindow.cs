@@ -1,12 +1,18 @@
 #if WINDOWS
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using EsportsUtil.Core;
 
 namespace EsportsUtil.Agent;
 
 /// <summary>Phase 4 locate overlay (PLAN.md): full-screen topmost window across the virtual desktop —
-/// giant display_name, station metadata line, QR encoding the DevicePin (same payload as the printed
+/// display_name, station metadata line, QR encoding the DevicePin (same payload as the printed
 /// label), pulsing accent border, live auto-dismiss countdown. Closes on expiry, click, or ESC.
+/// Foreground-of-everything guarantee: WM_WINDOWPOSCHANGING forces HWND_TOPMOST on every z-order
+/// change (steals topmost back from any app that raises itself), each timer tick re-asserts it, and
+/// first show tries SetForegroundWindow with a taskbar flash fallback when Windows' foreground lock
+/// refuses the steal. True exclusive-fullscreen games (no DWM composition) remain the one case no
+/// window can cover — venue games run borderless-windowed, which this does cover.
 /// Runs on its own STA thread; the agent stays a console process.</summary>
 [SupportedOSPlatform("windows10.0.19041")]
 public static class LocateOverlayWindow
@@ -43,14 +49,78 @@ public static class LocateOverlayWindow
             KeyPreview = true;
             KeyDown += (_, e) => { if (e.KeyCode == System.Windows.Forms.Keys.Escape) Close(); };
             MouseDown += (_, _) => Close();
-            Shown += (_, _) => { Activate(); Focus(); };
+            Shown += (_, _) =>
+            {
+                BringToFront();
+                ForceTopmost();
+                Activate();
+                if (!SetForegroundWindow(Handle))          // foreground lock may refuse a background spawn
+                {
+                    var fi = new FLASHWINFO
+                    {
+                        cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<FLASHWINFO>(),
+                        hwnd = Handle,
+                        dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG,
+                        uCount = 3,
+                        dwTimeout = 0,
+                    };
+                    FlashWindowEx(ref fi);
+                }
+                Focus();
+            };
             _timer.Tick += (_, _) =>
             {
                 _pulse = !_pulse;
                 if (!_req.ShouldShow(DateTimeOffset.UtcNow.ToUnixTimeSeconds())) { Close(); return; }
+                ForceTopmost();                           // reclaim z-order from anything that raised itself
                 Invalidate();
             };
             _timer.Start();
+        }
+
+        // --- foreground-of-everything plumbing -----------------------------------------------
+        private const int WM_WINDOWPOSCHANGING = 0x0046;
+        private static readonly IntPtr HWND_TOPMOST = new(-1);
+        private const uint SWP_NOMOVE = 0x0002, SWP_NOSIZE = 0x0001, SWP_NOACTIVATE = 0x0010;
+        private const uint FLASHW_ALL = 0x0003, FLASHW_TIMERNOFG = 0x000C;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+#pragma warning disable CS0649 // fields are populated by Marshal.PtrToStructure, never directly
+        private struct WINDOWPOS
+        {
+            public IntPtr hwnd, hwndInsertAfter;
+            public int x, y, cx, cy;
+            public uint flags;
+        }
+#pragma warning restore CS0649
+        [StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct FLASHWINFO
+        {
+            public uint cbSize;
+            public IntPtr hwnd;
+            public uint dwFlags, uCount, dwTimeout;
+        }
+
+        private void ForceTopmost() =>
+            SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_WINDOWPOSCHANGING)
+            {
+                // Force topmost on EVERY window-position/z-order change, so another TopMost app
+                // (game HUD, screensaver, taskbar tricks) can never interleave above the overlay.
+                var pos = System.Runtime.InteropServices.Marshal.PtrToStructure<WINDOWPOS>(m.LParam);
+                pos.hwndInsertAfter = HWND_TOPMOST;
+                System.Runtime.InteropServices.Marshal.StructureToPtr(pos, m.LParam, false);
+            }
+            base.WndProc(ref m);
         }
 
         protected override void OnFormClosed(System.Windows.Forms.FormClosedEventArgs e)
