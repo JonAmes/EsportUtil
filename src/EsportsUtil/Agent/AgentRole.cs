@@ -146,7 +146,7 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
     private IDownOverlayHandle? _downOverlay;
     private bool _downOverlayDismissed;
     private string? _lastHash;
-    private string? _downedContentApplied;          // content_id of the downed wallpaper currently applied
+    private string? _wallpaperKey;   // desired wallpaper currently applied: content_id while downed, "venue@<sha>" for the venue upload
     private DateTime _reportNow = DateTime.MinValue;
 
     public async Task RunAsync(CancellationToken ct)
@@ -199,7 +199,7 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                         LastDesiredState = ack.DesiredState;
                         PairedDisplayName = ack.DisplayName;
                         LastDownedReason = ack.DownedReason;
-                        await ReconcileDownedAsync(ack, runner, ct);
+                        await ReconcileWallpaperAsync(ack, runner, ct);
                         ReconcileDownOverlay(ack, id, model);
                         if (ack.Directives is { Count: > 0 })
                         {
@@ -260,27 +260,35 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
         }
     }
 
-    /// <summary>Downed convergence (desired-state, not liveness): while downed, ensure the downed
-    /// wallpaper content is cached and applied; on return to active, restore the recorded baseline.
-    /// Idempotent — only touches the desktop when the intended wallpaper actually changes.</summary>
-    private async Task ReconcileDownedAsync(AckEnvelope ack, JobRunner runner, CancellationToken ct)
+    /// <summary>Wallpaper convergence (desired-state, not liveness) — one unified loop for both
+    /// venue-surface images: while downed, the target is the downed marker (DownedContentId);
+    /// otherwise the venue wallpaper when the operator has set one via the settings page
+    /// (Content Library item `venue-wallpaper`, sha-keyed so a re-upload re-applies); otherwise
+    /// none, which restores the baseline recorded on the first apply. Downed layers over the venue
+    /// wallpaper and falls back to it on return to active. Idempotent — the desktop is touched only
+    /// when the intended target actually changes.</summary>
+    private async Task ReconcileWallpaperAsync(AckEnvelope ack, JobRunner runner, CancellationToken ct)
     {
-        if (ack.DesiredState == "downed")
+        string? contentId = null, key = null;
+        if (ack.DesiredState == "downed") { contentId = ack.DownedContentId; key = contentId; }
+        else if (ack.VenueWallpaperSha256 is { } sha) { contentId = ContentLibrary.ContentIds.VenueWallpaper; key = "venue@" + sha; }
+
+        if (key is null)
         {
-            var contentId = ack.DownedContentId;
-            if (contentId is null || contentId == _downedContentApplied) return;
-            var (ok, pathOrErr) = await runner.EnsureContentAsync(contentId, ct);
-            if (!ok) { Console.WriteLine($"downed wallpaper: {pathOrErr}"); return; }
-            Wallpaper.Apply(pathOrErr, cfg.DataDir, contentId);
-            _downedContentApplied = contentId;
-            Console.WriteLine($"downed wallpaper applied ({contentId})");
+            if (_wallpaperKey is not null)
+            {
+                Wallpaper.Restore(cfg.DataDir);
+                _wallpaperKey = null;
+                Console.WriteLine("wallpaper: no target — baseline restored");
+            }
+            return;
         }
-        else if (_downedContentApplied is not null)
-        {
-            Wallpaper.Restore(cfg.DataDir);
-            _downedContentApplied = null;
-            Console.WriteLine("downed cleared — baseline wallpaper restored");
-        }
+        if (key == _wallpaperKey) return;
+        var (ok, pathOrErr) = await runner.EnsureContentAsync(contentId!, ct);
+        if (!ok) { Console.WriteLine($"wallpaper: {pathOrErr}"); return; }
+        Wallpaper.Apply(pathOrErr, cfg.DataDir, contentId);
+        _wallpaperKey = key;
+        Console.WriteLine($"wallpaper applied: {key}");
     }
 
     /// <summary>Sticky downed overlay lifecycle (no expiration): shown once per downed episode,

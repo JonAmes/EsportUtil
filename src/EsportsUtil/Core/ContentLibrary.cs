@@ -28,6 +28,55 @@ public sealed class ContentLibrary
 
     public ContentItem? Find(string contentId) => Load().Items.FirstOrDefault(i => i.ContentId == contentId);
 
+    /// <summary>Stable ids this codebase mints itself — content is referenced by id everywhere, never by URL or path.</summary>
+    public static class ContentIds
+    {
+        public const string VenueWallpaper = "venue-wallpaper";   // settings-page upload; presence = venue-wide desired state
+    }
+
+    /// <summary>Operator upload (settings page): atomically write the bytes under FileDir and upsert the
+    /// manifest item. Re-uploading the same id replaces the previous file; version bumps on every mutation
+    /// so agents' sha256-keyed caches see the change.</summary>
+    public ContentItem Upsert(string contentId, string filename, string category, byte[] bytes)
+    {
+        var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        Directory.CreateDirectory(FileDir);
+        var old = Find(contentId);
+        var path = Path.Combine(FileDir, filename);
+        var tmp = path + ".tmp";
+        File.WriteAllBytes(tmp, bytes);
+        File.Move(tmp, path, overwrite: true);
+        if (old is not null && old.Filename != filename)
+        {
+            var stale = Path.Combine(FileDir, old.Filename);
+            if (File.Exists(stale)) File.Delete(stale);   // format swap leaves exactly one file
+        }
+        var items = Load().Items.ToList();
+        items.RemoveAll(i => i.ContentId == contentId);
+        var item = new ContentItem(contentId, filename, sha, category, bytes.Length);
+        items.Add(item);
+        SaveManifest(new ContentManifest(Load().Version + 1, DateTimeOffset.UtcNow, items));
+        return item;
+    }
+
+    public bool Remove(string contentId)
+    {
+        var old = Find(contentId);
+        if (old is null) return false;
+        var p = Path.Combine(FileDir, old.Filename);
+        if (File.Exists(p)) File.Delete(p);
+        SaveManifest(new ContentManifest(Load().Version + 1, DateTimeOffset.UtcNow,
+            Load().Items.Where(i => i.ContentId != contentId).ToList()));
+        return true;
+    }
+
+    private void SaveManifest(ContentManifest m)
+    {
+        File.WriteAllText(ManifestPath, Wire.ToJson(m));
+        _cache = m;
+        _cacheStamp = File.GetLastWriteTimeUtc(ManifestPath);
+    }
+
     public string? FilePathFor(string contentId)
     {
         var item = Find(contentId);

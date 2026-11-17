@@ -461,6 +461,23 @@ Check(await Until(async () => (await probe4.GetAsync("/content/down-oos")).IsSuc
 await PostAck4("/api/downed", new DownedRequest(cid4, "active", null, null));
 Check(await Until(() => Task.FromResult(Wallpaper.Read(agentDir4)?.ContentId is null), 15),
     "T14h returning to active restores the baseline wallpaper on the agent");
+
+// ---- T24: venue wallpaper upload (settings page) is venue-wide desired state on the same real agent ----
+var t24WpPng = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 11, 12, 13 };
+var t24WpUp = await probe4.PostAsync("/settings/wallpaper", new ByteArrayContent(t24WpPng));
+Check((int)t24WpUp.StatusCode == 200
+    && await Until(() => Task.FromResult(Wallpaper.Read(agentDir4) is { ContentId: "venue-wallpaper" }), 15),
+    "T24a venue wallpaper upload converges on the real agent (cached from library + applied)");
+await PostAck4("/api/downed", new DownedRequest(cid4, "downed", "down-oos", "qa"));
+Check(await Until(() => Task.FromResult(Wallpaper.Read(agentDir4) is { ContentId: "down-oos" }), 15),
+    "T24b downed marker layers over the venue wallpaper");
+await PostAck4("/api/downed", new DownedRequest(cid4, "active", null, null));
+Check(await Until(() => Task.FromResult(Wallpaper.Read(agentDir4) is { ContentId: "venue-wallpaper" }), 15),
+    "T24c return to active re-applies the venue wallpaper, not the old baseline");
+var t24WpDel = await probe4.DeleteAsync("/settings/wallpaper");
+Check((int)t24WpDel.StatusCode == 200
+    && await Until(() => Task.FromResult(Wallpaper.Read(agentDir4)?.ContentId is null), 15),
+    "T24d removing the venue wallpaper restores the PC's recorded baseline");
 cts4.Cancel(); await loopTask4; await app4.StopAsync();
 
 // ---------- T15: Phase 4 locate overlay pipeline units (payload → request → argv → render model) ----------
@@ -692,6 +709,43 @@ var t23Del2 = await setProbe.DeleteAsync("/settings/logo");
 var t23Del3 = await setProbe.DeleteAsync("/settings/logo");
 Check((int)t23Del2.StatusCode == 200 && (int)t23Del3.StatusCode == 404,
     "T23j second DELETE (nothing left) → 404 ack envelope, never throws");
+
+// ---------- T24: venue wallpaper storage shape (settings upload → Content Library desired state) ----------
+var t24Wp = await setProbe.PostAsync("/settings/wallpaper", new ByteArrayContent(t23Png));
+using (var wj = JsonDocument.Parse(await t24Wp.Content.ReadAsStringAsync()))
+    Check((int)t24Wp.StatusCode == 200
+        && wj.RootElement.GetProperty("wallpaper").GetProperty("format").GetString() == "png",
+        "T24e POST /settings/wallpaper accepts the same image set as the logo and reports it back");
+using (var mj = JsonDocument.Parse(File.ReadAllText(Path.Combine(setCfg.DataDir, "ContentManifest.json"))))
+{
+    var vi = mj.RootElement.GetProperty("items").EnumerateArray().Single();
+    Check(vi.GetProperty("content_id").GetString() == "venue-wallpaper"
+        && vi.GetProperty("category").GetString() == "wallpaper"
+        && vi.GetProperty("filename").GetString() == "venue-wallpaper.png"
+        && vi.GetProperty("sha256").GetString() == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(t23Png)).ToLowerInvariant()
+        && new FileInfo(Path.Combine(setCfg.DataDir, "content", "venue-wallpaper.png")).Length == t23Png.Length,
+        "T24f upload lands as Content Library item venue-wallpaper (correct sha256, category, bytes on disk)");
+}
+var t24Exe = await setProbe.PostAsync("/settings/wallpaper", new ByteArrayContent(new byte[] { (byte)'M', (byte)'Z', 1 }));
+var t24BigWp = await setProbe.PostAsync("/settings/wallpaper", new ByteArrayContent(new byte[(int)ImageFormats.MaxWallpaperBytes + 1]));
+var t24WpGet = await setProbe.GetAsync("/settings/wallpaper");
+Check((int)t24Exe.StatusCode == 415 && (int)t24BigWp.StatusCode == 413
+    && (int)t24WpGet.StatusCode == 200 && t24WpGet.Content.Headers.ContentType?.MediaType == "image/png"
+    && (await t24WpGet.Content.ReadAsByteArrayAsync()).SequenceEqual(t23Png)
+    && t24WpGet.Headers.CacheControl?.NoStore == true,
+    "T24g wallpaper gate: executable → 415, oversize → 413; GET serves exact bytes, sniffed MIME, no-store");
+var t24Page = await setProbe.GetStringAsync("/settings");
+Check(t24Page.Contains("/settings/wallpaper") && t24Page.Contains("Desktop wallpaper")
+    && t24Page.Contains("drop-wp"),
+    "T24h settings page markup carries a second drop slot wired to /settings/wallpaper");
+var t24Del = await setProbe.DeleteAsync("/settings/wallpaper");
+var t24Del2 = await setProbe.DeleteAsync("/settings/wallpaper");
+using (var apiW = JsonDocument.Parse(await setProbe.GetStringAsync("/api/settings")))
+    Check((int)t24Del.StatusCode == 200 && (int)t24Del2.StatusCode == 404
+        && !apiW.RootElement.TryGetProperty("wallpaper", out _)
+        && apiW.RootElement.GetProperty("max_wallpaper_bytes").GetInt64() == ImageFormats.MaxWallpaperBytes
+        && !File.Exists(Path.Combine(setCfg.DataDir, "content", "venue-wallpaper.png")),
+        "T24i delete removes item+file, second delete 404, /api/settings reports none + 8 MB cap");
 
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");

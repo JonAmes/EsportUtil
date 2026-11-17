@@ -70,7 +70,8 @@ public static class ServerRole
             if (e.Pending)
                 _ = hub.PublishAsync(new Alert("pairing_requested", "info",
                     "awaiting operator name", e.ClientId, e.DevicePin, DateTimeOffset.UtcNow));
-            return Results.Json(new AckEnvelope(true, DesiredState: e.DesiredState, DownedContentId: e.DownedContentId), Wire.Options);
+            return Results.Json(new AckEnvelope(true, DesiredState: e.DesiredState, DownedContentId: e.DownedContentId,
+                VenueWallpaperSha256: content.Find(ContentLibrary.ContentIds.VenueWallpaper)?.Sha256), Wire.Options);
         });
 
         // ---- heartbeat: ack carries desired state, unexpired directives, and the next queued job ----
@@ -87,7 +88,8 @@ public static class ServerRole
                 Directives: registry.TakeDirectives(req.ClientId),
                 Job: jobs.NextQueued(req.ClientId),
                 DisplayName: e.Pending ? null : e.DisplayName,
-                DownedReason: e.DownedReason), Wire.Options);
+                DownedReason: e.DownedReason,
+                VenueWallpaperSha256: content.Find(ContentLibrary.ContentIds.VenueWallpaper)?.Sha256), Wire.Options);
         });
 
         // ---- Phase 4: shared per-client issue resolution (drives /api/state AND job-creation guards) ----
@@ -187,7 +189,57 @@ public static class ServerRole
         });
 
         // ---- venue settings: logo (settings page posts raw bytes; magic-bytes gate + size cap, never trust name/MIME) ----
-        app.MapGet("/api/settings", () => Results.Json(new { logo = venueLogo.Info(), max_bytes = ImageFormats.MaxLogoBytes }, Wire.Options));
+        app.MapGet("/api/settings", () => Results.Json(new
+        {
+            logo = venueLogo.Info(), max_bytes = ImageFormats.MaxLogoBytes,
+            wallpaper = WallpaperInfo(), max_wallpaper_bytes = ImageFormats.MaxWallpaperBytes,
+        }, Wire.Options));
+
+        object? WallpaperInfo()
+        {
+            var it = content.Find(ContentLibrary.ContentIds.VenueWallpaper);
+            var p = it is null ? null : content.FilePathFor(it.ContentId);
+            if (p is null) return null;
+            var fi = new FileInfo(p);
+            return new LogoInfo(it!.Filename.Contains('.') ? FilenameExt(it.Filename) : it.Filename,
+                fi.Length, new DateTimeOffset(fi.LastWriteTimeUtc, TimeSpan.Zero).ToUnixTimeSeconds());
+        }
+        static string FilenameExt(string f) => f[(f.LastIndexOf('.') + 1)..].ToLowerInvariant();
+
+        // ---- venue wallpaper: the upload IS the venue-wide desired state — stored as Content Library
+        //      item `venue-wallpaper`; agents converge on the sha the heartbeat ack carries ----
+        app.MapPost("/settings/wallpaper", async (HttpRequest req) =>
+        {
+            if (req.ContentLength is > ImageFormats.MaxWallpaperBytes)
+                return Results.Json(new AckEnvelope(false, "wallpaper exceeds the 8 MB cap"), Wire.Options, statusCode: 413);
+            using var ms = new MemoryStream();
+            var buf = new byte[81920];
+            long total = 0; int n;
+            while ((n = await req.Body.ReadAsync(buf)) > 0)
+            {
+                ms.Write(buf, 0, n); total += n;
+                if (total > ImageFormats.MaxWallpaperBytes)
+                    return Results.Json(new AckEnvelope(false, "wallpaper exceeds the 8 MB cap"), Wire.Options, statusCode: 413);
+            }
+            var bytes = ms.ToArray();
+            var known = ImageFormats.Sniff(bytes);
+            if (known is null)
+                return Results.Json(new AckEnvelope(false, "not a supported image — header must be PNG, JPEG, BMP, GIF or WEBP"), Wire.Options, statusCode: 415);
+            content.Upsert(ContentLibrary.ContentIds.VenueWallpaper, "venue-wallpaper." + known.Value.Ext, "wallpaper", bytes);
+            return Results.Json(new { ok = true, wallpaper = WallpaperInfo() }, Wire.Options);
+        });
+        app.MapGet("/settings/wallpaper", (HttpResponse res) =>
+        {
+            var p = content.FilePathFor(ContentLibrary.ContentIds.VenueWallpaper);
+            if (p is null) return Results.NotFound();
+            var head = new byte[16];
+            using (var fs = File.OpenRead(p)) fs.ReadExactly(head.AsSpan(0, (int)Math.Min(16, fs.Length)));
+            res.Headers["Cache-Control"] = "no-store";
+            return Results.File(p, ImageFormats.Sniff(head)?.Mime ?? "application/octet-stream");
+        });
+        app.MapDelete("/settings/wallpaper", () =>
+            content.Remove(ContentLibrary.ContentIds.VenueWallpaper) ? Results.Json(new AckEnvelope(true), Wire.Options)
+                : Results.Json(new AckEnvelope(false, "no wallpaper set"), Wire.Options, statusCode: 404));
         app.MapPost("/settings/logo", async (HttpRequest req) =>
         {
             if (req.ContentLength is > ImageFormats.MaxLogoBytes)

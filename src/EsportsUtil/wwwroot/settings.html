@@ -39,11 +39,12 @@ h2{font-size:13px;margin:0 0 4px;font-weight:590;letter-spacing:.02em}
 .drop.over{border-color:var(--acc);background:rgba(109,141,255,.14);color:var(--fg);
  box-shadow:0 0 24px color-mix(in srgb,var(--acc) 25%,transparent)}
 .drop b{color:var(--fg)}
-#msg{font-size:12px;margin-top:10px;min-height:16px}
-#msg.ok{color:var(--ok)} #msg.err{color:var(--bad)}
+.msg{font-size:12px;margin-top:10px;min-height:16px}
+.msg.ok{color:var(--ok)} .msg.err{color:var(--bad)}
 .cur{display:flex;gap:14px;align-items:center;margin-top:14px}
 .frame{width:84px;height:84px;flex:none;border:1px solid var(--hair);border-radius:10px;
  background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.frame.wide{width:160px;height:90px}
 .frame img{max-width:100%;max-height:100%;object-fit:contain}
 .meta{font-size:12px;color:var(--mut)} .meta b{color:var(--fg)}
 button.rm{margin-left:auto;background:transparent;border:1px solid var(--bdr);color:var(--mut);
@@ -64,88 +65,127 @@ button.rm:hover{color:var(--bad);border-color:var(--bad)}
     <h2>Venue logo</h2>
     <p class="sub">Shows on station labels and both dashboards. PNG, JPEG, BMP, GIF or WEBP · max 4&nbsp;MB.</p>
 
-    <div class="drop" id="drop" tabindex="0" role="button"
+    <div class="drop" id="drop-logo" tabindex="0" role="button"
          aria-label="Drop a logo image here, or press Enter to browse for a file">
       <b>Drop an image here</b><br>or click to browse
     </div>
-    <input type="file" id="file" hidden
-           accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,image/png,image/jpeg,image/bmp,image/gif,image/webp">
-    <div id="msg" role="status"></div>
+    <div class="msg" id="msg-logo" role="status"></div>
 
-    <div class="cur" id="cur" hidden>
-      <div class="frame"><img id="curimg" alt="current venue logo"></div>
-      <div class="meta" id="curmeta"></div>
-      <button class="rm" id="rm">Remove</button>
+    <div class="cur" id="cur-logo" hidden>
+      <div class="frame"><img id="img-logo" alt="current venue logo"></div>
+      <div class="meta" id="meta-logo"></div>
+      <button class="rm" id="rm-logo">Remove</button>
     </div>
 
     <div class="note">Files are checked by content, not by name — only genuine image data is
       accepted, and anything over 4&nbsp;MB is rejected. Uploading replaces the current logo
       everywhere it appears.</div>
   </div>
+
+  <div class="card">
+    <h2>Desktop wallpaper</h2>
+    <p class="sub">Pushed to every PC in the venue. PNG, JPEG, BMP, GIF or WEBP · max 8&nbsp;MB.</p>
+
+    <div class="drop" id="drop-wp" tabindex="0" role="button"
+         aria-label="Drop a wallpaper image here, or press Enter to browse for a file">
+      <b>Drop an image here</b><br>or click to browse
+    </div>
+    <div class="msg" id="msg-wp" role="status"></div>
+
+    <div class="cur" id="cur-wp" hidden>
+      <div class="frame wide"><img id="img-wp" alt="current venue wallpaper"></div>
+      <div class="meta" id="meta-wp"></div>
+      <button class="rm" id="rm-wp">Remove</button>
+    </div>
+
+    <div class="note">Each PC applies it within one heartbeat (up to ~15&nbsp;s) and keeps its own
+      baseline — removing the venue wallpaper restores each desktop to what it had before. A
+      downed PC keeps its OUT OF SERVICE marker on top until it returns to service.</div>
+  </div>
 </div>
 
 <script>
-const MAX = 4 * 1024 * 1024;
-const drop = document.getElementById('drop'), file = document.getElementById('file'), msg = document.getElementById('msg');
+// One reusable drag & drop image slot: same gate, same UX, different endpoint + meta key.
+function slot(o) {
+  const drop = document.getElementById('drop-' + o.id), msg = document.getElementById('msg-' + o.id),
+        cur = document.getElementById('cur-' + o.id), img = document.getElementById('img-' + o.id),
+        meta = document.getElementById('meta-' + o.id), rm = document.getElementById('rm-' + o.id);
+  const say = (t, c) => { msg.textContent = t; msg.className = 'msg' + (c ? ' ' + c : ''); };
 
-const say = (t, c) => { msg.textContent = t; msg.className = c || ''; };
+  const file = document.createElement('input');
+  file.type = 'file'; file.hidden = true;
+  file.accept = '.png,.jpg,.jpeg,.bmp,.gif,.webp,image/png,image/jpeg,image/bmp,image/gif,image/webp';
+  document.body.appendChild(file);
+
+  function render(info) {
+    if (info) {
+      cur.hidden = false;
+      img.src = o.path + '?v=' + info.updated_unix;
+      meta.innerHTML =
+        '<b>' + info.format.toUpperCase() + '</b> · ' + (info.bytes < 1024 ? info.bytes + ' B' : Math.round(info.bytes / 1024) + ' KB') + '<br>' +
+        'updated ' + new Date(info.updated_unix * 1000).toLocaleString();
+    } else cur.hidden = true;
+  }
+
+  async function upload(f) {
+    if (!f) return;
+    if (!/\.(png|jpe?g|bmp|gif|webp)$/i.test(f.name) && !/^image\//.test(f.type))
+      return say('That is not an image file (PNG, JPEG, BMP, GIF, WEBP).', 'err');
+    if (f.size > o.max) return say('Image is over ' + (o.max / 1048576) + ' MB — pick a smaller file.', 'err');
+    say('Uploading…');
+    try {
+      const r = await fetch(o.path, { method: 'POST', body: f });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        return say(j.error || ('Upload rejected (' + r.status + ').'), 'err');
+      }
+      say(o.savedMsg, 'ok');
+      const s = await (await fetch('/api/settings')).json();
+      render(s[o.key]);
+      if (o.afterSave) o.afterSave(s);
+    } catch (e) { say('Upload failed: ' + e.message, 'err'); }
+  }
+
+  drop.addEventListener('click', () => file.click());
+  drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } });
+  file.addEventListener('change', () => { upload(file.files[0]); file.value = ''; });
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; drop.classList.add('over');
+  }));
+  ['dragleave', 'dragend'].forEach(ev => drop.addEventListener(ev, () => drop.classList.remove('over')));
+  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files[0]); });
+
+  rm.addEventListener('click', async () => {
+    await fetch(o.path, { method: 'DELETE' });
+    say(o.removedMsg, 'ok');
+    cur.hidden = true;
+    if (o.afterRemove) o.afterRemove();
+  });
+
+  return { render };
+}
+
+const logo = slot({ id: 'logo', path: '/settings/logo', key: 'logo', max: 4 * 1024 * 1024,
+  savedMsg: 'Logo saved — labels and dashboards pick it up.',
+  removedMsg: 'Logo removed — placeholders restored.',
+  afterSave: s => brand(s), afterRemove: () => brand(null) });
+const wp = slot({ id: 'wp', path: '/settings/wallpaper', key: 'wallpaper', max: 8 * 1024 * 1024,
+  savedMsg: 'Wallpaper saved — every PC applies it within ~15 s.',
+  removedMsg: 'Wallpaper removed — each PC restores its own baseline.' });
+
+function brand(s) {
+  const t = document.getElementById('brand');
+  t.innerHTML = s ? '<img src="/settings/logo?v=' + s.logo.updated_unix + '" alt="logo">' : 'E';
+}
 
 async function load() {
   try {
     const s = await (await fetch('/api/settings')).json();
-    const cur = document.getElementById('cur');
-    if (s.logo) {
-      cur.hidden = false;
-      document.getElementById('curimg').src = '/settings/logo?v=' + s.logo.updated_unix;
-      document.getElementById('curmeta').innerHTML =
-        '<b>' + s.logo.format.toUpperCase() + '</b> · ' + (s.logo.bytes < 1024 ? s.logo.bytes + ' B' : Math.round(s.logo.bytes / 1024) + ' KB') + '<br>' +
-        'updated ' + new Date(s.logo.updated_unix * 1000).toLocaleString();
-      const t = document.getElementById('brand');
-      t.innerHTML = '<img src="/settings/logo?v=' + s.logo.updated_unix + '" alt="logo">';
-    } else cur.hidden = true;
+    logo.render(s.logo);
+    wp.render(s.wallpaper);
+    brand(s.logo ? s : null);
   } catch { }
 }
-
-async function upload(f) {
-  if (!f) return;
-  if (!/\.(png|jpe?g|bmp|gif|webp)$/i.test(f.name) && !/^image\//.test(f.type))
-    return say('That is not an image file (PNG, JPEG, BMP, GIF, WEBP).', 'err');
-  if (f.size > MAX) return say('Image is over 4 MB — pick a smaller file.', 'err');
-  say('Uploading…');
-  try {
-    const r = await fetch('/settings/logo', { method: 'POST', body: f });
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}));
-      return say(j.error || ('Upload rejected (' + r.status + ').'), 'err');
-    }
-    say('Logo saved — labels and dashboards pick it up.', 'ok');
-    load();
-  } catch (e) { say('Upload failed: ' + e.message, 'err'); }
-}
-
-drop.addEventListener('click', () => file.click());
-drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } });
-file.addEventListener('change', () => { upload(file.files[0]); file.value = ''; });
-
-['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => {
-  e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; drop.classList.add('over');
-}));
-['dragleave', 'dragend'].forEach(ev => drop.addEventListener(ev, () => drop.classList.remove('over')));
-drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files[0]); });
-
-// dropping anywhere on the page also uploads, so the target doesn't have to be hit exactly
-window.addEventListener('dragover', e => e.preventDefault());
-window.addEventListener('drop', e => {
-  e.preventDefault();
-  if (!drop.contains(e.target)) upload(e.dataTransfer.files[0]);
-});
-
-document.getElementById('rm').addEventListener('click', async () => {
-  await fetch('/settings/logo', { method: 'DELETE' });
-  say('Logo removed — placeholders restored.', 'ok');
-  document.getElementById('cur').hidden = true;
-});
-
 load();
 </script>
 </body>

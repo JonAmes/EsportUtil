@@ -42,7 +42,8 @@ public sealed record AckEnvelope(
     List<Directive>? Directives = null,
     Job? Job = null,
     string? DisplayName = null,    // heartbeat ack only: operator's display_name once the device is paired (null = pending)
-    string? DownedReason = null);  // heartbeat ack only: operator's downed note — drives the sticky downed overlay
+    string? DownedReason = null,   // heartbeat ack only: operator's downed note — drives the sticky downed overlay
+    string? VenueWallpaperSha256 = null);  // heartbeat/register ack: sha of Content Library item `venue-wallpaper` (null = none set; agents converge on it)
 
 public sealed record RenameRequest(string ClientId, string DisplayName, string? Location = null);
 

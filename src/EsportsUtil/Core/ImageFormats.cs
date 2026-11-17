@@ -6,6 +6,7 @@ namespace EsportsUtil.Core;
 public static class ImageFormats
 {
     public const long MaxLogoBytes = 4L * 1024 * 1024;   // venue logos never need more
+    public const long MaxWallpaperBytes = 8L * 1024 * 1024;   // wallpapers are legitimately bigger than logos
 
     public readonly record struct Known(string Ext, string Mime);
 
