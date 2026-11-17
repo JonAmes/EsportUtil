@@ -6,3 +6,8 @@ data/
 bin/
 obj/
 *.user
+
+# Working docs — kept local only, not in the remote repo
+AGENTS.md
+PLAN.md
+IDEA.md
