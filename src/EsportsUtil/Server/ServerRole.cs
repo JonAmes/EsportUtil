@@ -131,10 +131,35 @@ public static class ServerRole
                     ws?["actual_sha256"]?.GetValue<string>());
                 var apps = ms["apps"] as JsonArray;           // T29 venue-app verdicts (verbatim)
                 registry.SetApps(report.ClientId, apps?.ToJsonString());
+                // T32: full four-view registry inventory (user: "report which apps are installed").
+                registry.SetInstalledApps(report.ClientId, (ms["installedApps"] as JsonArray)?.ToJsonString());
                 registry.SetSelfUpdate(report.ClientId, (ms["selfUpdate"] as JsonObject)?.ToJsonString());
             }
             return Results.Json(new AckEnvelope(true), Wire.Options);
         });
+
+        // T32: installed_apps projection keeps operator-facing fields only — publisher/version/hive/view.
+        // Uninstall strings (the agent's local command lines) deliberately never ship to a browser.
+        static JsonArray CompactApps(string json)
+        {
+            var kept = new JsonArray();
+            if (JsonNode.Parse(json) is not JsonArray arr) return kept;
+            static string? G(JsonObject o, string k) => o[k] is JsonValue v ? v.ToString() : null;
+            foreach (var n in arr.OfType<JsonObject>())
+            {
+                var name = G(n, "display_name");
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                kept.Add(new JsonObject
+                {
+                    ["name"] = name, ["publisher"] = G(n, "publisher"), ["version"] = G(n, "display_version"),
+                    ["hive"] = G(n, "hive"), ["view"] = G(n, "view"),
+                });
+            }
+            var sorted = kept.Select(x => x!).OrderBy(x => x["name"]!.GetValue<string>(), StringComparer.OrdinalIgnoreCase).ToList();
+            kept.Clear();
+            foreach (var x in sorted) kept.Add(x);
+            return kept;
+        }
 
         // ---- factory state pull ----
         app.MapGet("/api/factory-state", () => Results.Json(manifests.LoadMaster().FactoryStateMap, Wire.Options));
@@ -453,6 +478,7 @@ public static class ServerRole
                     wu_scan_min_ago = e.WuScanUnix is null ? (double?)null : Math.Round((now.ToUnixTimeSeconds() - e.WuScanUnix.Value) / 60.0, 1),
                     wallpaper_drift = e.WpDrift,
                     apps = e.AppsJson is null ? null : JsonNode.Parse(e.AppsJson),
+                    installed_apps = e.InstalledAppsJson is null ? null : CompactApps(e.InstalledAppsJson),
                     self_update = e.SelfUpdateJson is null ? null : JsonNode.Parse(e.SelfUpdateJson),
                     games = sum?.GameCount,
                     duplicates = sum?.DuplicateCount,

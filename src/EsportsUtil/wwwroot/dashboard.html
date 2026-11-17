@@ -133,6 +133,11 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
   .mbtn:disabled{opacity:.35;cursor:default}
   .mnote{color:var(--mut);font-size:12.5px;line-height:1.55}
   .merr{color:#f87171;font-size:12px;font-weight:510}
+  #ia-list{max-height:52vh;overflow:auto;margin-top:10px}
+  .iarow{display:flex;gap:10px;align-items:baseline;padding:5px 2px;border-bottom:1px solid var(--hair)}
+  .iarow .ianame{font-weight:550} .iarow .iaver{color:var(--mut);font-size:11.5px}
+  .iarow .iasrc{margin-left:auto;color:var(--mut);font-size:10.5px;white-space:nowrap}
+  .iapub{color:var(--mut);font-size:11px;padding:0 2px 5px}
   .mbox input.pin{font-family:ui-monospace,monospace;letter-spacing:.4em;text-align:center}
 </style>
 </head>
@@ -205,6 +210,14 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
       <button class="mbtn" onclick="closeRename()">cancel</button>
       <button class="mbtn pri" onclick="saveRename()">save</button>
     </div>
+  </div>
+</div>
+<div class="modal" id="ia-modal" hidden onclick="if(event.target===this)closeApps()">
+  <div class="mbox" style="width:min(600px,94vw)">
+    <div class="mtitle" id="ia-title">Installed applications</div>
+    <input id="ia-filter" placeholder="filter — name, publisher, or source (HKLM|32 = WOW6432Node)" oninput="renderIApps()">
+    <div id="ia-list" class="mono"></div>
+    <div class="mrow"><button class="mbtn" onclick="closeApps()">close</button></div>
   </div>
 </div>
 <div class="modal" id="off-modal" hidden onclick="if(event.target===this)closeOffboard()">
@@ -290,6 +303,29 @@ async function printLabel(cid){
   if (r.url) window.open(r.url, '_blank');
   else alert(r.error || 'label failed');
 }
+// T32: installed-apps browser — what the agent found in the registry Uninstall views.
+function openApps(cid){
+  const dev = (_state.devices || []).find(x => x.client_id === cid);
+  if (!dev) return;
+  _iaDev = dev;
+  document.getElementById('ia-title').textContent = `${dev.display_name} — ${(dev.installed_apps||[]).length} installed apps`;
+  document.getElementById('ia-filter').value = '';
+  renderIApps();
+  document.getElementById('ia-modal').hidden = false;
+  document.getElementById('ia-filter').focus();
+}
+function closeApps(){ document.getElementById('ia-modal').hidden = true; }
+function renderIApps(){
+  const f = (document.getElementById('ia-filter').value || '').toLowerCase();
+  const rows = (dev_installed(_iaDev) || []).filter(a =>
+    !f || `${a.name} ${a.publisher||''} ${a.hive}|${a.view}`.toLowerCase().includes(f));
+  document.getElementById('ia-list').innerHTML =
+    rows.map(a => `<div class="iarow"><span class="ianame">${esc(a.name)}</span><span class="iaver">${esc(a.version||'')}</span><span class="iasrc">${esc(a.hive)}|${esc(a.view)}</span></div>` +
+      (a.publisher ? `<div class="iapub">${esc(a.publisher)}</div>` : '')).join('')
+    || '<div class="iapub">nothing matches</div>';
+}
+function dev_installed(dev){ return dev ? dev.installed_apps : null; }
+
 const FIXABLE = {update_required:'update_game', missing_from_machine:'update_game', duplicate_resolved:'cleanup_duplicate', unapproved_app:'remove_software'};
 async function fixJob(cid, kind, subjEnc){
   const subject = decodeURIComponent(subjEnc);
@@ -314,10 +350,12 @@ async function pushAppUpdate(cid, appId){
 
 function esc(s){ return String(s ?? '').replace(/[&<>\"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c])); }
 
+let _state = null, _iaDev = null;   // last /api/state snapshot (installed-apps browser reads from here)
 async function refresh(){
   let d;
   try { d = await (await fetch('/api/state')).json(); }
   catch { document.getElementById('rows').innerHTML = '<tr><td colspan="8" style="color:var(--bad)">server unreachable</td></tr>'; return; }
+  _state = d;
   document.getElementById('clock').textContent = new Date(d.server_time).toLocaleTimeString();
   document.getElementById('c-agents').textContent = d.agents_reporting;
   document.getElementById('c-agents-d').textContent = `of ${d.agents_total} registered`;
@@ -373,7 +411,9 @@ async function refresh(){
         ${dev.machine_model?`<div class="sub2" style="margin-left:16px">${esc(dev.machine_model)}</div>`:''}${dupNote}</td>
       <td><span class="pill ${dev.online?'ok':'bad'} mono pinx" title="Revoke PIN ${esc(dev.device_pin)} and offboard this PC" onclick="offboard('${dev.client_id}')">${esc(dev.device_pin)}&nbsp;<span style="opacity:.5">✕</span></span></td>
       <td><div class="hb"><i style="width:${hbW}%;background:${hbC}"></i></div><div class="sub2 mono" style="margin-top:3px">${agoTxt}</div></td>
-      <td class="mono">${dev.games ?? '—'}</td>
+      <td class="mono">${dev.games ?? '—'}${dev.installed_apps && dev.installed_apps.length
+        ? `<div style="margin-top:5px"><span class="cchip act" title="installed applications the agent read from the Windows registry — click to browse" onclick="openApps('${dev.client_id}')">${dev.installed_apps.length} apps</span></div>`
+        : ''}</td>
       <td style="max-width:340px">${chips}${appChips}${suChip}${jobs}</td>
       <td>
         <span class="pill ${dn?'':up?'yel':'ok'}" ${dn?'hidden':''} title="${up?`${dev.wu_pending} Windows update${dev.wu_pending===1?'':'s'} pending — last poll ${wuAgo(dev.wu_scan_min_ago)}`:'Windows updates: none pending'}">${up?`${dev.wu_pending} update${dev.wu_pending===1?'':'s'}`:'active'}</span>

@@ -26,7 +26,10 @@ agent resource gate). Windows-box runtime gates remain — see `deploy/BUILD.md`
   and Epic register; a 64-bit process never sees those in the default view), HKCU 64-bit and HKCU
   32-bit — tagging every entry with its hive+view. Steam library roots (and their installed games)
   come from `SOFTWARE\Valve\Steam`: `InstallPath` plus the user's `SteamLibrary*` values, so a
-  non-default Steam install location no longer means zero visible games.
+  non-default Steam install location no longer means zero visible games. The operator dashboard
+  shows an **`N apps`** chip on every PC that opens a searchable browser of that machine's full
+  inventory — name, version, publisher and source view (`HKLM|32` = WOW6432Node). Uninstall
+  command lines stay on the agent; they are never shipped to the browser.
 - **Alerting:** in-process queue drained by a hosted service → Windows toast on the server box
   (console on dev), fired only on state change.
 - **Resource budget (hard gate):** idle agent <1% CPU avg, <60 MB working set — asserted by the

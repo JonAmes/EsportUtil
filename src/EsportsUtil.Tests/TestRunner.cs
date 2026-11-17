@@ -983,6 +983,8 @@ Check(t29Cat.Count == 6 && t29C404 == 404 && t29C400 == 400
     "T29h install/update routes: catalog served; ghost 404; unknown app 400; success queues exactly one job in ack shape; duplicate open job 409; update before any app report 400");
 var t29Ms = new JsonObject { ["apps"] = AppCatalog.ToNode(AppCatalog.Statuses(
     JsonNode.Parse("""[{"display_name":"Google Chrome","display_version":"120.0.0.0"}]"""), id => id == "chrome" ? "121.0" : null, 777)) };
+// T32: same report also carries the raw four-view inventory, uninstall strings included.
+t29Ms["installedApps"] = JsonNode.Parse("""[{"registry_key":"ChromeHTML","display_name":"Google Chrome","publisher":"Google LLC","display_version":"120.0.0.0","install_location":"C:\\\\Program Files\\\\Google\\\\Chrome","uninstall_string":"msiexec.exe /x {ABCD}","quiet_uninstall_string":"msiexec.exe /x {ABCD} /q","hive":"HKCU","view":"64"},{"registry_key":"Steam","display_name":"Steam","publisher":"Valve Corporation","display_version":"2.10.91","uninstall_string":"\\\\Steam\\\\uninstall.exe","hive":"HKLM","view":"32"}]""");
 var (t29CRep, _) = await Post6("/api/report", new LocalManifest("c-t29reg", "8888", "Install Bench",
     DateTimeOffset.UtcNow, "test", t29Ms, new List<GameReport>()));
 var t29Dev6 = Wire.FromJson<JsonDoc>(await probe6.GetStringAsync("/api/state"))!
@@ -991,6 +993,13 @@ Check(t29CRep == 200 && t29Dev6.apps is { Count: 6 }
     && t29Dev6.apps!.First(a => a.app_id == "chrome") is { installed: true, up_to_date: false, version: "120.0.0.0" }
     && t29Dev6.apps!.All(a => a.checked_unix == 777),
     "T29i machine_state.apps → registry → /api/state: six rows projected; chrome 120 vs vendor 121 reads installed+outdated on the server");
+var t32Chrome = t29Dev6.installed_apps!.First(a => a.name == "Google Chrome");
+var t32Steam = t29Dev6.installed_apps!.First(a => a.name == "Steam");
+var t32Raw6 = await probe6.GetStringAsync("/api/state");
+Check(t29Dev6.installed_apps is { Count: 2 } && t32Chrome.hive == "HKCU" && t32Chrome.view == "64" && t32Chrome.version == "120.0.0.0"
+    && t32Steam.hive == "HKLM" && t32Steam.view == "32" && t32Steam.publisher == "Valve Corporation"
+    && !t32Raw6.Contains("msiexec") && !t32Raw6.Contains("uninstall_string") && !t32Raw6.Contains("registry_key"),
+    "T32a machine_state.installedApps → registry → /api/state: full inventory projected as installed_apps (name/publisher/version/hive/view, sorted); uninstall strings + registry keys deliberately never leave the agent");
 var (t29CUpd1, t29JUpd1) = await Post6("/api/update-app/c-t29reg", new AppInstallRequest("chrome"));
 var (t29CUpd2, _) = await Post6("/api/update-app/c-t29reg", new AppInstallRequest("epic"));
 Check(t29CUpd1 == 200 && t29JUpd1["ok"]!.GetValue<bool>() && t29JUpd1["job"]!["kind"]!.GetValue<string>() == "update_app"
@@ -1081,6 +1090,11 @@ Check(dashHtmlLate.Contains("pushAppUpdate") && dashHtmlLate.Contains("up_to_dat
           && File.ReadAllText(Path.Combine(t31Root, "README.md")).Contains("WOW6432Node")
           && File.ReadAllText(Path.Combine(t31Root, "deploy", "BUILD.md")).Contains("WOW6432Node"),
         "T31e docs+schema name the four registry views and the WOW6432Node trap once, so it is never re-discovered by an operator");
+
+    var t32Dash = File.ReadAllText(Path.Combine(t31Root, "src", "EsportsUtil", "wwwroot", "dashboard.html"));
+    Check(t32Dash.Contains("ia-modal") && t32Dash.Contains("openApps(") && t32Dash.Contains("installed_apps")
+          && t32Dash.Contains("renderIApps()"),
+        "T32b dashboard ships the installed-apps browser: 'N apps' chip opens a filterable modal fed by the projected installed_apps field");
 }
 
 
@@ -1120,8 +1134,9 @@ static bool Throws<T>(Action a) where T : Exception
 
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
-file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null, bool wallpaper_drift = false, List<AppDoc>? apps = null);
+file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null, bool wallpaper_drift = false, List<AppDoc>? apps = null, List<InstAppDoc>? installed_apps = null);
 file sealed record AppDoc(string app_id, bool installed, string? version, bool? up_to_date, long checked_unix);
+file sealed record InstAppDoc(string name, string? publisher, string? version, string hive, string view);
 
 /// <summary>Fake sticky-overlay child for T21: Alive flips when staff "bypasses" on the machine;
 /// WasKilled records the operator-driven clear. The agent loop supervises this handle each ack.</summary>

@@ -30,6 +30,7 @@ public sealed class RegistryEntry
     // Venue-app install verdicts (machine_state.apps, T29): raw JSON array kept verbatim so the
     // dashboard/settings page render exactly what the agent reported. Null = never reported.
     public string? AppsJson { get; set; }
+    public string? InstalledAppsJson { get; set; }
     public string? SelfUpdateJson { get; set; }
 
     [JsonIgnore] public List<Directive> PendingDirectives { get; set; } = new();
@@ -181,6 +182,19 @@ public sealed class DeviceRegistry
             if (!_devices.TryGetValue(clientId, out var e)) return;
             if (e.AppsJson == appsJson) return;
             e.AppsJson = appsJson;
+            Save();
+        }
+    }
+
+    /// <summary>Store the latest full installed-app inventory JSON (machine_state.installedApps,
+    /// four-view registry Uninstall scan) verbatim.</summary>
+    public void SetInstalledApps(string clientId, string? installedAppsJson)
+    {
+        lock (_gate)
+        {
+            if (!_devices.TryGetValue(clientId, out var e)) return;
+            if (e.InstalledAppsJson == installedAppsJson) return;
+            e.InstalledAppsJson = installedAppsJson;
             Save();
         }
     }
