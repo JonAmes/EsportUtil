@@ -60,6 +60,9 @@ public static class Identity
 /// to Core (StateModule/GameScanner); the transport never re-implements it (no-duplication rule).</summary>
 public sealed class AgentClient(HttpClient http, EsportsConfig cfg, AgentIdentity id)
 {
+    /// <summary>Current identity — rotates when the operator offboards this machine (see Rotate).</summary>
+    public AgentIdentity Id => id;
+
     private static async Task<AckEnvelope?> PostAckAsync(HttpClient http, string url, object body, CancellationToken ct)
     {
         var resp = await http.PostAsync(url,
@@ -116,6 +119,22 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
     public string LastDesiredState { get; private set; } = "active";
     public List<Directive> ConsumedDirectives { get; } = new();
     public int ReportsSent { get; private set; }
+
+    // ---- live state projection for the localhost client view (read-only) ----
+    public bool IsRegistered { get; private set; }
+    public AgentIdentity? CurrentIdentity => _client?.Id;
+    public DateTimeOffset? LastAckAt { get; private set; }
+    public bool LastAckOk { get; private set; }
+    public string? LastAckError { get; private set; }
+    /// <summary>Operator's display_name, streamed on the heartbeat ack once the device is paired; null = still pending.</summary>
+    public string? PairedDisplayName { get; private set; }
+    public DateTimeOffset? LastReportAt { get; private set; }
+    public string? LastReportHash { get; private set; }
+    public LocalManifest? LastReport { get; private set; }
+    /// <summary>Most-recent-first ring of jobs this agent ran, with final state stamped (capped).</summary>
+    public IReadOnlyList<Job> RecentJobs => _recentJobs;
+    private readonly List<Job> _recentJobs = new();
+    private AgentClient? _client;
     /// <summary>Locate overlay surface. Default spawns the same-EXE overlay child; tests inject a probe.</summary>
     public Action<LocateOverlayRequest> OverlaySurface { get; set; } = req => OverlayLauncher.Launch(req);
     private string? _lastHash;
@@ -126,6 +145,7 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
     {
         var id = Identity.LoadOrCreate(cfg.DataDir);
         var client = new AgentClient(http, cfg, id);
+        _client = client;
         var runner = new JobRunner(http, cfg);
         // Console banner mirrors the client_app mockup identity: big PIN, server, liveness.
         var pinSpaced = string.Join(' ', id.DevicePin.ToCharArray());
@@ -147,11 +167,15 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                 {
                     model = StateModule.Record()["machineModel"]?.GetValue<string>();
                     registered = await client.RegisterAsync(model, ct);
+                    IsRegistered = registered;
                 }
 
                 if (registered)
                 {
                     var ack = await client.HeartbeatAsync(AgentInfo.Version, ct);
+                    LastAckAt = DateTimeOffset.UtcNow;
+                    LastAckOk = ack?.Ok == true;
+                    LastAckError = ack?.Error;
                     if (ack is null || !ack.Ok)
                     {
                         if (ack?.Error == "unknown client_id — re-register") registered = false;
@@ -160,10 +184,12 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                             registered = false;       // next register rotates identity (see RegisterAsync)
                             Console.WriteLine("heartbeat refused: offboarded by operator — re-pairing required");
                         }
+                        IsRegistered = registered;
                     }
                     else
                     {
                         LastDesiredState = ack.DesiredState;
+                        PairedDisplayName = ack.DisplayName;
                         await ReconcileDownedAsync(ack, runner, ct);
                         if (ack.Directives is { Count: > 0 })
                         {
@@ -192,20 +218,31 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                             var (ok, detail) = await runner.RunAsync(job, ct);
                             await runner.ReportJobStateAsync(job, ok ? "succeeded" : "failed", detail, ct);
                             Console.WriteLine($"job {job.Kind} '{job.Subject}' → {(ok ? "succeeded" : "failed")}: {detail}");
+                            _recentJobs.Insert(0, job with
+                            {
+                                State = ok ? "succeeded" : "failed",
+                                Detail = detail,
+                                FinishedUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                            });
+                            if (_recentJobs.Count > 20) _recentJobs.RemoveAt(_recentJobs.Count - 1);
                             if (ok) _reportNow = DateTime.UtcNow;      // prove the repair: re-report promptly
                         }
                         if (DateTime.UtcNow >= nextReport || DateTime.UtcNow >= _reportNow)
                         {
                             var m = await client.BuildManifestAsync(ct);
                             var hash = AgentClient.ContentHash(m);
-                            if (hash != _lastHash && await client.ReportAsync(m, ct)) { _lastHash = hash; ReportsSent++; }
+                            if (hash != _lastHash && await client.ReportAsync(m, ct))
+                            {
+                                _lastHash = hash; ReportsSent++;
+                                LastReport = m; LastReportAt = DateTimeOffset.UtcNow; LastReportHash = hash;
+                            }
                             nextReport = DateTime.UtcNow.AddMinutes(cfg.SlowScanIntervalMin);
                             _reportNow = DateTime.MaxValue;
                         }
                     }
                 }
             }
-            catch (HttpRequestException) { registered = false; }              // server away; retry next tick
+            catch (HttpRequestException) { registered = false; IsRegistered = false; }   // server away; retry next tick
             catch (OperationCanceledException) { break; }
 
             try { await Task.Delay(TimeSpan.FromSeconds(cfg.HeartbeatIntervalSec), ct); }

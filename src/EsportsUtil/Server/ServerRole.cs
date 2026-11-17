@@ -84,7 +84,8 @@ public static class ServerRole
                 DesiredState: e.DesiredState,
                 DownedContentId: e.DownedContentId,
                 Directives: registry.TakeDirectives(req.ClientId),
-                Job: jobs.NextQueued(req.ClientId)), Wire.Options);
+                Job: jobs.NextQueued(req.ClientId),
+                DisplayName: e.Pending ? null : e.DisplayName), Wire.Options);
         });
 
         // ---- Phase 4: shared per-client issue resolution (drives /api/state AND job-creation guards) ----

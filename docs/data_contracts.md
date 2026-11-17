@@ -102,3 +102,17 @@ logons. Downed is visual status only (wallpaper swap), never a session lock.
 `downed_reason` is the operator note. Liveness is derived (last heartbeat vs
 timeout), never stored as a flag. Transient one-shot directives (e.g. `locate`
 with expiry) ride the heartbeat ack and are **not** persisted in the registry.
+
+## 📟 6. Client Status (§client-status — agent-local, read-only)
+
+The agent serves a read-only client dashboard on **127.0.0.1 only**
+(`agent_dashboard_port`, default 4310; `agent_dashboard: false` disables it).
+`GET /api/local_status` returns a `LocalStatus` projection of the agent loop:
+identity (`client_id`, `device_pin`), link health (`registered`, `last_ack_at`,
+`last_ack_ok`, `last_ack_error`), the operator's `display_name` (streamed down on
+heartbeat acks — `null` while pairing is pending), convergence state
+(`desired_state`, `last_report_at`, `reports_sent`, `report_hash`), the current
+manifest (`machine_model`, `games`, `duplicates`) and the last 20 executed
+server-issued jobs (`recent_jobs`). It is a view, not a control plane: no
+endpoint here mutates fleet state, and closing the page never pauses
+registration, heartbeat, reporting, jobs or repairs.

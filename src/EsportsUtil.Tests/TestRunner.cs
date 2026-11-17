@@ -159,6 +159,60 @@ Check(loop.ReportsSent <= 2, "T8f content-hash dedupe: no re-upload of unchanged
         "T19l dashboard wires trashcan AND clickable PIN pill to /api/offboard");
 }
 
+// ---------- T20: agent client dashboard (read-only localhost view served by the agent) ----------
+{
+    agCfg.AgentDashboardPort = 0;                                   // ephemeral loopback bind in tests
+    var dash = ClientDashboard.Start(loop, agCfg);
+    using var view = new HttpClient { BaseAddress = new Uri(dash.Url), Timeout = TimeSpan.FromSeconds(5) };
+    async Task<LocalStatus> View() => Wire.FromJson<LocalStatus>(await view.GetStringAsync("/api/local_status"))!;
+
+    Check(await Until(async () =>
+    {
+        var v = await View();
+        return v.ClientId == cid && v.Registered && v.AgentVersion == AgentInfo.Version;
+    }, 6), "T20a client view mirrors live agent identity + registration from the loop");
+
+    Check((await View()).DevicePin == (await State()).devices.First(d => d.client_id == cid).device_pin,
+        "T20b client view PIN matches the registry PIN the operator sees server-side");
+
+    Check(await Until(async () => (await View()).DisplayName == "LAN-PC-TEST", 6),
+        "T20c heartbeat ack display_name streams the operator pairing name into the client view");
+
+    var page = await view.GetStringAsync("/");
+    Check(page.Contains("/api/local_status") && page.Contains("Client Agent") && page.Contains("awaiting pairing"),
+        "T20d agent serves client.html: polls /api/local_status with PIN/pairing sections");
+
+    await PostAck("/api/downed", new DownedRequest(cid, "active", null, null));
+    Check(await Until(async () => (await View()).DesiredState == "active", 6),
+        "T20e active desired_state flows from server into the client view");
+    await PostAck("/api/downed", new DownedRequest(cid, "downed", "out-of-service", "T20 drill"));
+    Check(await Until(async () => (await View()).DesiredState == "downed", 6),
+        "T20f downed desired_state flows into the client view state pill");
+    await PostAck("/api/downed", new DownedRequest(cid, "active", null, null));
+    await Until(async () => (await View()).DesiredState == "active", 6);
+
+    Check(await Until(async () =>
+    {
+        var v = await View();
+        return v.ReportsSent >= 1 && v.Games.Count >= 2 && v.Duplicates.Count >= 1 && !string.IsNullOrEmpty(v.ReportHash);
+    }, 8), "T20g client view shows the last local manifest: detected games, duplicates, report hash");
+
+    // a real server-issued job runs through the loop and surfaces in the client view with final state
+    // (seed server-1's content library — mtime-invalidated load — then deploy that asset as a job;
+    //  wallpaper apply is a no-op on Linux so final state may be either — the gate is visibility)
+    var srvContent = Path.Combine(tmp, "srv", "content");
+    Directory.CreateDirectory(srvContent);
+    var t20png = new byte[] { 0x89, 0x50, 0x4E, 0x47 };
+    File.WriteAllBytes(Path.Combine(srvContent, "t20-oos.png"), t20png);
+    File.WriteAllText(Path.Combine(tmp, "srv", "ContentManifest.json"), Wire.ToJson(new ContentManifest(1, DateTimeOffset.UtcNow,
+        new List<ContentItem> { new("t20-oos", "t20-oos.png", Convert.ToHexString(SHA256.HashData(t20png)).ToLowerInvariant(), "wallpaper") })));
+    var jr = await probe.PostAsync("/api/jobs", new StringContent(Wire.ToJson(new NewJobRequest(cid, "deploy_content", "t20-oos")), System.Text.Encoding.UTF8, "application/json"));
+    Check((int)jr.StatusCode == 200, "T20h deploy_content job accepted for the loop device");
+    Check(await Until(async () => (await View()).RecentJobs.Any(j => j.Kind == "deploy_content" && j.State is "succeeded" or "failed"), 20),
+        "T20i executed job surfaces in the client view Jobs section with final state");
+    dash.Stop();
+}
+
 // liveness: agent stops heartbeating -> critical alert fires
 cts.Cancel(); await loopTask;
 Check(await Until(async () => (await State()).alerts.Any(a => a.type == "heartbeat_lost" && a.severity == "critical"), 15),
@@ -528,7 +582,7 @@ static bool Throws<T>(Action a) where T : Exception
 
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
-file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null);
+file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null);
 file sealed record IssueDoc(string kind, string subject, string? keep_path, bool? @protected);
 file sealed record JobDoc(string job_id, string kind, string subject, string state, string? detail);
 file sealed record AlertDoc(string type, string severity);

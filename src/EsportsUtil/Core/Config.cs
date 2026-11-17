@@ -17,6 +17,8 @@ public sealed class EsportsConfig
     public int LocateTtlSec { get; set; } = 30;
     public string Printer { get; set; } = "";                    // named Windows queue; "" = file fallback
     public bool ToastNotifications { get; set; } = true;         // Windows toast on the server box (Phase 3)
+    public bool AgentDashboard { get; set; } = true;             // agent role serves the client view on localhost
+    public int AgentDashboardPort { get; set; } = 4310;          // loopback only; 0 = ephemeral (tests)
     public string SteamCmdPath { get; set; } = "steamcmd";       // agent-side updater executable (allow-listed handler only)
     public int JobTimeoutMin { get; set; } = 90;                 // per-job wall clock cap; running jobs past this + ack window are abandoned
     public Budget Budgets { get; set; } = new();

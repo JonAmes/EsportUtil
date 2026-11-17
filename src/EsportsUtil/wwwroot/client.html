@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>E-Sports Dashboard · Client Agent</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+/* Design system copied from the operator dashboard (dashboard.html) — one web stack, one look.
+   Section layout follows the approved mockup (mockups/client_app.html):
+   Pairing · Liveness · Software · Jobs. Served by the agent on 127.0.0.1 only. */
+:root{color-scheme:dark;
+--bg:#0d0f14;--fg:#f7f8f8;--mut:#8a8f98;--acc:#6d8dff;
+--bdr:rgba(255,255,255,.08);--card:rgba(255,255,255,.03);
+--hair:color-mix(in srgb,var(--fg) 7%,transparent);
+--ok:#10b981;--warn:#d97706;--bad:#ef4444;--info:#38bdf8;}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:
+ radial-gradient(120% 90% at 85% -10%,rgba(27,20,48,.55),transparent 60%),
+ radial-gradient(100% 90% at -10% 110%,rgba(22,35,61,.5),transparent 60%),
+ var(--bg);
+ background-attachment:fixed;
+ color:var(--fg);font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;
+ display:flex;flex-direction:column;align-items:center}
+.mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.esu{width:min(920px,100%);min-width:560px;padding:16px 14px 30px;font-variant-numeric:tabular-nums}
+
+/* header */
+.head{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--hair);padding-bottom:12px;flex-wrap:wrap}
+.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 45%,#22d3ee));display:inline-flex;align-items:center;justify-content:center;font-weight:700;color:#fff;transform:translateY(4px);box-shadow:0 0 18px color-mix(in srgb,var(--acc) 50%,transparent)}
+h1{font-size:18px;font-weight:590;letter-spacing:-.4px;margin:0}
+h1 span{color:var(--mut);font-weight:450}
+.chip{border:1px solid var(--bdr);border-radius:999px;padding:2px 10px;font-size:11px;color:var(--mut)}
+.chip b{color:var(--fg);font-weight:510}
+.live{margin-left:auto;font-size:11px;color:var(--mut);display:inline-flex;align-items:center;gap:6px}
+
+/* dots */
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.dot.ok{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}
+.dot.warn{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 18%,transparent)}
+.dot.bad{background:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 20%,transparent);animation:pulse 1.2s infinite}
+.dot.info{background:var(--info);box-shadow:0 0 0 3px color-mix(in srgb,var(--info) 18%,transparent);animation:pulse 1.6s infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 6px transparent}}
+
+/* stat cards */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0 18px}
+.stat{background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:12px 14px 10px;position:relative;overflow:hidden}
+.stat::before{content:"";position:absolute;inset:0 auto auto 0;width:100%;height:2px;background:linear-gradient(90deg,var(--tint,var(--acc)),transparent 70%)}
+.stat .l{color:var(--mut);font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;display:flex;align-items:center;gap:6px}
+.stat .n{font-size:26px;font-weight:590;letter-spacing:-1px;margin-top:4px}
+.stat .d{font-size:11px;color:var(--mut);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat.s-ok{--tint:var(--ok)} .stat.s-ok .n{color:var(--ok)}
+.stat.s-warn{--tint:var(--warn)} .stat.s-warn .n{color:var(--warn)}
+.stat.s-bad{--tint:var(--bad)} .stat.s-bad .n{color:var(--bad)}
+.bigpin{font-size:24px;letter-spacing:.28em;font-weight:700;color:var(--acc)}
+
+/* sections & tables */
+.sec{margin-bottom:16px}
+.sec-h{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+.sec-h .t{font-size:11px;font-weight:590;text-transform:uppercase;letter-spacing:.1em;color:var(--mut)}
+.sec-h .rule{flex:1;height:1px;background:var(--hair)}
+table{width:100%;border-collapse:separate;border-spacing:0;background:var(--card);border:1px solid var(--hair);border-radius:10px;overflow:hidden}
+th{text-align:left;font-size:10px;font-weight:590;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);padding:8px 9px;background:color-mix(in srgb,var(--fg) 3%,transparent);border-bottom:1px solid var(--hair);white-space:nowrap}
+td{padding:9px 9px;border-bottom:1px solid var(--hair);font-size:12.5px;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:color-mix(in srgb,var(--fg) 4%,transparent)}
+
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:510;border:1px solid var(--bdr)}
+.pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 35%,transparent);background:color-mix(in srgb,var(--ok) 8%,transparent)}
+.pill.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent);background:color-mix(in srgb,var(--warn) 8%,transparent)}
+.pill.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent)}
+.pill.info{color:var(--info);border-color:color-mix(in srgb,var(--info) 35%,transparent);background:color-mix(in srgb,var(--info) 8%,transparent)}
+.pill.mut{color:var(--mut);border-style:dashed}
+
+/* key/value card */
+.kvs{background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:4px 14px}
+.kv{display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:7px 0;border-bottom:1px solid var(--hair);font-size:12.5px}
+.kv:last-child{border-bottom:none}
+.kv .k{color:var(--mut)}
+.kv .v{text-align:right;word-break:break-all}
+
+.foot{display:flex;gap:10px;align-items:center;margin-top:14px;color:var(--mut);font-size:11.5px}
+.note{color:var(--mut);font-size:11.5px;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="esu">
+  <div class="head">
+    <span class="logo">E</span>
+    <h1>E-Sports Dashboard <span>· Client Agent</span></h1>
+    <span class="chip mono" id="chipver">v—</span>
+    <span class="chip" id="chipmodel">—</span>
+    <span class="live" id="live"><span class="dot info"></span>connecting…</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="l">Device PIN</div>
+      <div class="n mono bigpin" id="pin">— — — —</div>
+      <div class="d" id="pairline">awaiting pairing</div></div>
+    <div class="stat" id="sthb"><div class="l">Heartbeat</div>
+      <div class="n" id="hbn">…</div><div class="d" id="hbd">contacting server</div></div>
+    <div class="stat" id="strep"><div class="l">Reports</div>
+      <div class="n" id="repn">0</div><div class="d" id="repd">no report yet</div></div>
+    <div class="stat" id="ststate"><div class="l">Desired state</div>
+      <div class="n" id="stn">—</div><div class="d" id="std">—</div></div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-h"><span class="t">Pairing · Identity</span><span class="rule"></span><span class="chip" id="hashchip"></span></div>
+    <div class="kvs" id="ident"></div>
+    <div class="note">Show this PIN to the operator at the server dashboard to pair this PC. The agent keeps
+      reporting even when this page is closed — the view is read-only and served on 127.0.0.1 only.</div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-h"><span class="t">Software · Local Manifest</span><span class="rule"></span><span class="chip" id="gcount"></span></div>
+    <table><thead><tr><th>Game</th><th>Version</th><th>Launcher</th><th>Status</th></tr></thead>
+      <tbody id="games"><tr><td colspan="4" style="color:var(--mut)">no report yet — first scan running</td></tr></tbody></table>
+    <div class="note" id="dupnote"></div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-h"><span class="t">Jobs · Server-issued on this PC</span><span class="rule"></span></div>
+    <table><thead><tr><th>Finished</th><th>Kind</th><th>Subject</th><th>Result</th></tr></thead>
+      <tbody id="jobs"><tr><td colspan="4" style="color:var(--mut)">none run yet</td></tr></tbody></table>
+  </div>
+
+  <div class="foot">
+    <span>guardrails: naming · WU settings · drivers — never touched</span>
+    <span style="margin-left:auto" class="mono">local status · loopback only</span>
+  </div>
+</div>
+
+<script>
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $=id=>document.getElementById(id);
+const ago=(iso,fresh)=>{
+  if(!iso)return '—';
+  const s=Math.max(0,(Date.now()-new Date(iso).getTime())/1000);
+  if(s<60)return Math.round(s)+'s ago';
+  if(s<3600)return Math.round(s/60)+'m ago';
+  return Math.round(s/3600)+'h ago';
+};
+const hhmm=unix=>unix?new Date(unix*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—';
+const jpill=k=>k==='succeeded'?'ok':k==='failed'?'bad':k==='running'?'info':'mut';
+
+async function tick(){
+  let s=null;
+  try{ const r=await fetch('/api/local_status',{cache:'no-store'}); if(r.ok)s=await r.json(); }catch(e){}
+  if(!s){ $('live').innerHTML='<span class="dot bad"></span>agent process unreachable'; return; }
+
+  // header: pairing truth — name arrives on the heartbeat ack once the operator names this machine
+  const paired=!!s.display_name;
+  $('chipver').textContent='v'+(s.agent_version||'?');
+  $('chipmodel').textContent=s.machine_model||'model unknown';
+  $('live').innerHTML=s.registered
+    ? (paired?'<span class="dot ok"></span>paired · reporting':'<span class="dot info"></span>registered · awaiting pairing')
+    : '<span class="dot bad"></span>not registered';
+
+  // stat cards
+  $('pin').textContent=(s.device_pin||'————').split('').join(' ');
+  $('pairline').textContent=paired?s.display_name:'show PIN to operator';
+  const hbOk=s.last_ack_ok, hbFresh=s.last_ack_at&&(Date.now()-new Date(s.last_ack_at).getTime())<s.heartbeat_interval_sec*4000;
+  $('sthb').className='stat '+(hbOk&&hbFresh?'s-ok':'s-bad');
+  $('hbn').textContent=hbOk&&hbFresh?'LIVE':'DOWN';
+  $('hbd').textContent=(s.last_ack_at?'ack '+ago(s.last_ack_at):'no ack yet')+(s.last_ack_error?' · '+s.last_ack_error:'')+' · beat '+s.heartbeat_interval_sec+'s';
+  $('strep').className='stat '+(s.reports_sent>0?'s-ok':'');
+  $('repn').textContent=s.reports_sent;
+  $('repd').textContent=s.last_report_at?(s.games.length+' games · '+ago(s.last_report_at)):'no report yet';
+  const dn=s.desired_state==='downed';
+  $('ststate').className='stat '+(dn?'s-warn':'s-ok');
+  $('stn').textContent=(s.desired_state||'?').toUpperCase();
+  $('std').textContent=dn?'out of service · wallpaper swap':'in service';
+
+  // identity card
+  const row=(k,v,cls)=>`<div class="kv"><span class="k">${k}</span><span class="v ${cls||''}">${v}</span></div>`;
+  $('ident').innerHTML=
+    row('Server',esc(s.server_url))+
+    row('client_id','<span class="mono">'+esc(s.client_id||'—')+'</span>')+
+    row('Pairing',paired?'<span class="pill ok">'+esc(s.display_name)+'</span>':'<span class="pill info">awaiting pairing</span>')+
+    row('Desired state',dn?'<span class="pill warn">downed</span>':'<span class="pill ok">active</span>')+
+    row('Last report','<span class="mono">'+(s.last_report_at?new Date(s.last_report_at).toLocaleTimeString():'—')+' · '+s.reports_sent+' sent</span>');
+  $('hashchip').textContent=s.report_hash?'manifest '+s.report_hash.slice(0,8):'';
+
+  // software table (from the last accepted local manifest)
+  $('gcount').textContent=s.games.length+' detected';
+  $('games').innerHTML=s.games.length?s.games.map(g=>
+    '<tr><td class="mono">'+esc(g.game_id)+'</td><td class="mono">'+esc(g.current_version)+'</td><td>'+esc(g.launcher)+'</td><td><span class="pill '+(g.status==='OK'?'ok':g.status==='DUPLICATE_FOUND'?'warn':'bad')+'">'+esc(g.status)+'</span></td></tr>').join('')
+    :'<tr><td colspan="4" style="color:var(--mut)">'+(s.last_report_at?'no games found in configured scan dirs':'no report yet — first scan running')+'</td></tr>';
+  $('dupnote').textContent=s.duplicates.length?s.duplicates.map(d=>d.game_id+': '+d.paths.length+' copies').join(' · ')+' — flagged, never auto-deleted.':'';
+
+  // jobs
+  $('jobs').innerHTML=s.recent_jobs.length?s.recent_jobs.map(j=>
+    '<tr><td class="mono">'+hhmm(j.finished_unix)+'</td><td class="mono">'+esc(j.kind)+'</td><td class="mono">'+esc(j.subject)+'</td><td><span class="pill '+jpill(j.state)+'">'+esc(j.state)+'</span>'+(j.detail?' <span style="color:var(--mut);font-size:11px">'+esc(j.detail.slice(0,60))+'</span>':'')+'</td></tr>').join('')
+    :'<tr><td colspan="4" style="color:var(--mut)">none run yet</td></tr>';
+}
+tick(); setInterval(tick,3000);
+</script>
+</body>
+</html>

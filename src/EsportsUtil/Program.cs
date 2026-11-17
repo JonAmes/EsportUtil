@@ -1,6 +1,7 @@
 using EsportsUtil.Agent;
 using EsportsUtil.Core;
 using EsportsUtil.Server;
+using Microsoft.AspNetCore.Builder;
 
 string? roleFlag = null;
 string? configPath = null, foundConfig = null;
@@ -75,7 +76,17 @@ if (cfg.Role == "server")
 else
 {
     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-    await new AgentLoop(http, cfg).RunAsync(cts.Token);
+    var loop = new AgentLoop(http, cfg);
+    ClientDashboard? dash = null;
+    if (cfg.AgentDashboard)
+    {
+        // PLAN.md: the agent role serves the client operator view from a small localhost listener —
+        // read-only, loopback-only, reporting continues whether or not the page is open.
+        dash = ClientDashboard.Start(loop, cfg);
+        Console.WriteLine($"client dashboard: {dash.Url} (open in this PC's browser)");
+    }
+    await loop.RunAsync(cts.Token);
+    dash?.Stop();
 }
 return 0;
 

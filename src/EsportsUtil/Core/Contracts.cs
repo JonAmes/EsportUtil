@@ -40,7 +40,8 @@ public sealed record AckEnvelope(
     string DesiredState = "active",
     string? DownedContentId = null,
     List<Directive>? Directives = null,
-    Job? Job = null);
+    Job? Job = null,
+    string? DisplayName = null);   // heartbeat ack only: operator's display_name once the device is paired (null = pending)
 
 public sealed record RenameRequest(string ClientId, string DisplayName, string? Location = null);
 
