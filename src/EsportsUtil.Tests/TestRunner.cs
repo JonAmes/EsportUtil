@@ -354,6 +354,26 @@ Check(ConsoleOverlay.RenderCard(ovReq, nowT15) is var card && card.Contains("LAN
 Check(OverlayLauncher.RequestFor(new Directive("locate", null, nowT15 + 30), new AgentIdentity("abc", "0042"), null).DisplayName == "PIN 0042",
     "T15g unnamed device falls back to PIN label (never blank overlay title)");
 
+// ---------- T16: Phase 4 overlay layout math (the "text too big" regression gate) ----------
+foreach (var (tw, th) in new[] { (1920, 1080), (1280, 720), (3840, 2160), (1366, 768) })
+{
+    var ly = OverlayLayout.Compute(tw, th, 37, "LAN-PC-07", "PIN 0042 · Precision 7920 Tower · client 11111111", "ESU:11111111-2222-3333-4444-555555555555:0042");
+    Check(ly.NameSize <= th * 0.10f + 1 && ly.NameSize >= 24
+        && ly.LabelY + ly.LabelSize * 1.3f <= ly.NameY + 0.01f
+        && ly.NameY + ly.NameSize * 1.3f <= ly.MetaY + 0.01f
+        && ly.MetaY + ly.MetaSize * 1.3f <= ly.QrY + 0.01f
+        && ly.QrY + ly.QrPx * (ly.QrModules + 6) <= ly.PayloadY + 0.01f
+        && ly.PayloadY + ly.PayloadSize * 1.3f < ly.CountdownY
+        && ly.CountdownY + ly.CountdownSize < th
+        && (ly.QrModules + 6) * ly.QrPx <= tw * 0.46f,
+        $"T16a {tw}x{th}: stacked layout fits vertically, no line overlaps, QR within width budget");
+    var longName = "STATION ZERO-NINE-ALPHA BRAVO CHARLIE DELTA ECHO";
+    var ly2 = OverlayLayout.Compute(tw, th, 37, longName, "PIN 0042 · Precision 7920 Tower · client 11111111", "ESU:11111111-2222-3333-4444-555555555555:0042");
+    Check(0.62f * ly2.NameSize * longName.Length <= tw * 0.81f
+        && (longName.Length * 0.62f * Math.Clamp(th * 0.10f, 28, 150) > tw * 0.80f ? ly2.NameSize < Math.Clamp(th * 0.10f, 28, 150) : true),
+        $"T16b {tw}x{th}: oversized display_name shrinks to fit 80% width (never clips)");
+}
+
 // ---------- T11: resource budget gate (PLAN.md) — standalone agent, idle ----------
 var perfSecs = int.TryParse(Environment.GetEnvironmentVariable("PERF_SECS"), out var ps) ? ps : 20;
 var agentBin = Path.Combine(AppContext.BaseDirectory, "esportsutil.dll");

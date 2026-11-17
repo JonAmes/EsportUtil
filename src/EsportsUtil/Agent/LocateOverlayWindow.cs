@@ -70,21 +70,21 @@ public static class LocateOverlayWindow
                 g.DrawRectangle(pen, 5, 5, w - 11, h - 11);
 
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-            // giant name, auto-sized to the screen
             var name = _req.DisplayName.ToUpperInvariant();
-            var nameSize = Math.Clamp(w / Math.Max(8, name.Length / 2), 48, 220);
-            DrawCentered(g, name, nameSize, FontStyle.Bold, Color.White, h * 0.16f);
-            DrawCentered(g, "LOCATE", nameSize * 0.28f, FontStyle.Bold, Accent, h * 0.10f);
-            DrawCentered(g, _req.MetaLine(), Math.Max(18, nameSize / 4), FontStyle.Regular, Color.FromArgb(190, 200, 210), h * 0.30f);
+            var meta = _req.MetaLine();
+            var payload = _req.QrPayload();
+            var qr = Qr.Modules(payload);
+            var L = OverlayLayout.Compute(w, h, qr.Length, name, meta, payload);
 
-            // scannable QR (white pad + black modules on the dark stage)
-            var qr = Qr.Modules(_req.QrPayload());
-            int modules = qr.Length;
-            int px = Math.Clamp(Math.Min(w, h) / (modules + 8), 4, 14);
+            DrawCentered(g, "LOCATE", L.LabelSize, FontStyle.Bold, Accent, L.LabelY);
+            DrawCentered(g, name, L.NameSize, FontStyle.Bold, Color.White, L.NameY);
+            DrawCentered(g, meta, L.MetaSize, FontStyle.Regular, Color.FromArgb(190, 200, 210), L.MetaY);
+
+            // scannable QR (white pad + black modules on the dark stage), px-per-module from the layout
+            int px = L.QrPx, modules = qr.Length;
             int qrSize = modules * px;
             var pad = 3 * px;
-            var box = new Rectangle(w / 2 - qrSize / 2 - pad, (int)(h * 0.38f) - pad, qrSize + 2 * pad, qrSize + 2 * pad);
+            var box = new Rectangle(w / 2 - qrSize / 2 - pad, (int)L.QrY, qrSize + 2 * pad, qrSize + 2 * pad);
             g.FillRectangle(Brushes.White, box);
             using var brush = new SolidBrush(Color.Black);
             for (int y = 0; y < modules; y++)
@@ -92,18 +92,24 @@ public static class LocateOverlayWindow
                     if (qr[y][x])
                         g.FillRectangle(brush, box.X + pad + x * px, box.Y + pad + y * px, px, px);
 
-            DrawCentered(g, _req.QrPayload(), Math.Max(14, nameSize / 6), FontStyle.Regular, Color.FromArgb(150, 160, 170), box.Bottom + h * 0.03f);
+            DrawCentered(g, payload, L.PayloadSize, FontStyle.Regular, Color.FromArgb(150, 160, 170), L.PayloadY);
 
             // live auto-dismiss countdown
             DrawCentered(g, $"auto-dismiss in {_req.SecondsLeft(now)} s — click or press ESC to close",
-                Math.Max(18, nameSize / 4), FontStyle.Bold, Accent, h * 0.90f);
+                L.CountdownSize, FontStyle.Bold, Accent, L.CountdownY);
         }
 
         private void DrawCentered(System.Drawing.Graphics g, string text, float size, FontStyle style, Color color, float y)
         {
-            using var f = new Font("Segoe UI", size, style, GraphicsUnit.Pixel);
+            var f = new Font("Segoe UI", size, style, GraphicsUnit.Pixel);
             var sz = g.MeasureString(text, f);
-            g.DrawString(text, f, new SolidBrush(color), (ClientSize.Width - sz.Width) / 2, y);
+            while (sz.Width > ClientSize.Width * 0.94f && f.Size > 10)   // measured fit, not just estimated
+            {
+                var smaller = new Font(f.FontFamily, f.Size * 0.9f, f.Style, GraphicsUnit.Pixel);
+                f.Dispose(); f = smaller; sz = g.MeasureString(text, f);
+            }
+            using (f)
+                g.DrawString(text, f, new SolidBrush(color), (ClientSize.Width - sz.Width) / 2, y);
         }
     }
 }

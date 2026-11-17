@@ -74,6 +74,58 @@ public static class Qr
     }
 }
 
+/// <summary>Pure stacked-flow layout for the fullscreen overlay (px sizes + Y cursors), testable on any
+/// OS. Everything auto-fits: name/meta shrink to stay inside the width budget, the QR scales to the
+/// height budget, and lines never overlap — the previous fixed-position giant text clipped/overlapped.</summary>
+public static class OverlayLayout
+{
+    public sealed record Layout(
+        float LabelSize, float LabelY,
+        float NameSize, float NameY,
+        float MetaSize, float MetaY,
+        int QrPx, float QrY, int QrModules,
+        float PayloadSize, float PayloadY,
+        float CountdownSize, float CountdownY);
+
+    // Rough average advance width per char for Segoe UI (bold/regular) as a fraction of pixel size.
+    private const float BoldFactor = 0.62f, RegularFactor = 0.52f;
+
+    public static Layout Compute(int w, int h, int qrModules, string name, string meta, string payloadLine)
+    {
+        float labelSize = Math.Clamp(h * 0.032f, 14, 34);
+        float countdownSize = Math.Clamp(h * 0.030f, 14, 28);
+        float payloadSize = Math.Clamp(h * 0.022f, 12, 22);
+        float metaSize = Math.Clamp(h * 0.030f, 14, 28);
+
+        // Name: generous but capped, then shrink-to-fit the 80% width budget.
+        float nameSize = Math.Clamp(h * 0.10f, 28, 150);
+        float nameWidth = BoldFactor * nameSize * name.Length;
+        if (nameWidth > w * 0.80f) nameSize = Math.Max(24, nameSize * w * 0.80f / nameWidth);
+
+        if (RegularFactor * metaSize * meta.Length > w * 0.85f)
+            metaSize = Math.Max(12, metaSize * w * 0.85f / (RegularFactor * meta.Length));
+        if (RegularFactor * payloadSize * payloadLine.Length > w * 0.90f)
+            payloadSize = Math.Max(11, payloadSize * w * 0.90f / (RegularFactor * payloadLine.Length));
+
+        // QR: fit inside 36% of height and 45% of width (including its white pad ring of 3 modules).
+        int qrPx = Math.Clamp((int)(Math.Min(h * 0.36f, w * 0.45f) / (qrModules + 6)), 3, 14);
+        float qrOuter = qrPx * (qrModules + 6);
+
+        // Stack top-to-bottom; countdown pinned near the bottom.
+        float y = h * 0.08f;
+        float labelY = y; y += labelSize * 1.3f;
+        float nameY = y; y += nameSize * 1.3f + h * 0.01f;
+        float metaY = y; y += metaSize * 1.3f + h * 0.025f;
+        float qrY = y; y += qrOuter + h * 0.012f;
+        float payloadY = y;
+
+        float countdownY = h - countdownSize - h * 0.035f;
+        // Safety: if anything still overruns, callers shrink nothing further — the budgets above prevent it.
+        return new Layout(labelSize, labelY, nameSize, nameY, metaSize, metaY,
+            qrPx, qrY, qrModules, payloadSize, payloadY, countdownSize, countdownY);
+    }
+}
+
 /// <summary>Dev/Linux console fallback: renders the same content (giant name, meta, scannable half-block QR,
 /// countdown) in the terminal so the full pipeline is exercisable without a Windows desktop.</summary>
 public static class ConsoleOverlay
