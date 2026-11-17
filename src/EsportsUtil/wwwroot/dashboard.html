@@ -64,7 +64,9 @@ tbody tr{transition:background .15s}
 tbody tr:hover{background:color-mix(in srgb,var(--fg) 4%,transparent)}
 .dev{display:flex;align-items:center;gap:8px;font-weight:510}
 .dev a{color:inherit;text-decoration:none}
-.sub2{color:var(--mut);font-size:11px}
+.sub2{color:var(--mut);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
+td:first-child{min-width:240px}
+.dev a{white-space:nowrap}
 .pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:510;border:1px solid var(--bdr)}
 .pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 35%,transparent);background:color-mix(in srgb,var(--ok) 8%,transparent)}
 .pill.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent);background:color-mix(in srgb,var(--warn) 8%,transparent)}
@@ -106,6 +108,20 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
 .feed .msg{font-size:12.5px}
 .feed .msg b{font-weight:590}
 .foot{display:flex;gap:10px;align-items:center;margin-top:14px;color:var(--mut);font-size:11.5px}
+  /* rename/location modal */
+  .modal{position:fixed;inset:0;background:rgba(6,7,10,.62);display:flex;align-items:center;justify-content:center;z-index:50}
+  .modal[hidden]{display:none}
+  .mbox{width:380px;background:#14151b;border:1px solid var(--bdr);border-radius:12px;padding:18px;
+        box-shadow:0 18px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:10px}
+  .mtitle{font-size:14px;font-weight:590;letter-spacing:-.2px}
+  .mtitle small{color:var(--mut);font-weight:400}
+  .mbox input{background:#0d0f14;border:1px solid var(--bdr);border-radius:8px;color:var(--fg);
+              padding:9px 11px;font:13px/1.4 inherit;outline:none}
+  .mbox input:focus{border-color:var(--acc)}
+  .mrow{display:flex;gap:8px;justify-content:flex-end;margin-top:2px}
+  .mbtn{border:1px solid var(--bdr);background:transparent;color:var(--fg);border-radius:8px;
+        padding:8px 14px;font-size:12.5px;cursor:pointer}
+  .mbtn.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:590}
 </style>
 </head>
 <body>
@@ -167,23 +183,51 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
     rename, downed and locate act live against the device registry — downed applies on the agent's next heartbeat ack; locate is a one-shot directive with TTL.
   </div>
 </div>
+<div class="modal" id="rn-modal" hidden onclick="if(event.target===this)closeRename()">
+  <div class="mbox">
+    <div class="mtitle" id="rn-title">Name this station</div>
+    <input id="rn-name" placeholder="Station name — e.g. LAN-PC-07" maxlength="48">
+    <input id="rn-loc" placeholder="Location — e.g. Zone A · Row 2 · Seat 5" maxlength="48">
+    <div class="mrow">
+      <button class="mbtn" onclick="closeRename()">cancel</button>
+      <button class="mbtn pri" onclick="saveRename()">save</button>
+    </div>
+  </div>
+</div>
 <script>
 async function api(path, body){
   const r = await fetch(path, body ? {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)} : {});
   return r.json();
 }
-async function rename(cid, cur){
-  const name = prompt('Display name for this device:', cur === null ? '' : cur);
-  if (name) await api('/api/rename',{client_id:cid, display_name:name});
-  refresh();
+let _rnCid = null;
+function rename(cid, cur, loc){
+  _rnCid = cid;
+  document.getElementById('rn-title').textContent = cur === null ? 'Name this station' : 'Edit station';
+  const n = document.getElementById('rn-name'), l = document.getElementById('rn-loc');
+  n.value = cur ?? ''; l.value = loc ?? '';
+  document.getElementById('rn-modal').hidden = false;
+  n.focus();
 }
+function closeRename(){ document.getElementById('rn-modal').hidden = true; _rnCid = null; }
+async function saveRename(){
+  const name = document.getElementById('rn-name').value.trim();
+  if (!name) { document.getElementById('rn-name').focus(); return; }
+  await api('/api/rename', {client_id:_rnCid, display_name:name,
+                            location:document.getElementById('rn-loc').value.trim()});
+  closeRename(); refresh();
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRename(); });
 async function toggleDown(cid, on){
   await api('/api/downed',{client_id:cid, desired_state: on ? 'downed' : 'active',
     downed_content_id: on ? 'out-of-service' : null});
   refresh();
 }
 async function locate(cid){ await api('/api/locate/'+cid, {}); refresh(); }
-async function printLabel(cid){ const r = await api('/api/print-label/'+cid, {}); if(r.artifact) alert('label artifact: '+r.artifact); }
+async function printLabel(cid){
+  const r = await api('/api/print-label/'+cid, {});
+  if (r.url) window.open(r.url, '_blank');
+  else alert(r.error || 'label failed');
+}
 const FIXABLE = {update_required:'update_game', missing_from_machine:'update_game', duplicate_resolved:'cleanup_duplicate', unapproved_app:'remove_software'};
 async function fixJob(cid, kind, subjEnc){
   const subject = decodeURIComponent(subjEnc);
@@ -241,7 +285,8 @@ async function refresh(){
     const jobs = (dev.jobs || []).slice(0,3).map(j =>
       `<div class="jobline ${j.state}" title="${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}">${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}</div>`).join('');
     return `<tr class="${dn?'downed':''}">
-      <td><span class="dev"><span class="dot ${dotCls}"></span><a href="#" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`});return false">${esc(dev.display_name)}${dev.pending?' <span class="sub2">(awaiting name)</span>':''}</a></span>
+      <td><span class="dev"><span class="dot ${dotCls}"></span><a href="#" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`},${dev.location?`'${esc(dev.location)}'`:'null'});return false">${esc(dev.display_name)}${dev.pending?' <span class="sub2">(awaiting name)</span>':''}</a></span>
+        ${dev.location?`<div class="sub2" style="margin-left:16px">${esc(dev.location)}</div>`:''}
         ${dev.machine_model?`<div class="sub2" style="margin-left:16px">${esc(dev.machine_model)}</div>`:''}${dupNote}</td>
       <td><span class="pill ${dev.online?'ok':'bad'} mono">${esc(dev.device_pin)}</span></td>
       <td><div class="hb"><i style="width:${hbW}%;background:${hbC}"></i></div><div class="sub2 mono" style="margin-top:3px">${agoTxt}</div></td>

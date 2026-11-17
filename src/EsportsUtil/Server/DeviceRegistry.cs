@@ -10,6 +10,7 @@ public sealed class RegistryEntry
     public string ClientId { get; set; } = "";
     public string DevicePin { get; set; } = "";
     public string DisplayName { get; set; } = "";            // "" until operator names it
+    public string? Location { get; set; }                    // venue seat/zone, set during onboarding
     public string? MachineModel { get; set; }
     public DateTimeOffset RegisteredTimestamp { get; set; }
     public DateTimeOffset? LastHeartbeat { get; set; }
@@ -77,15 +78,18 @@ public sealed class DeviceRegistry
         }
     }
 
-    public bool Rename(string clientId, string displayName)
+    public bool Rename(string clientId, string displayName, string? location = null)
     {
         displayName = displayName.Trim();
         if (displayName.Length is 0 or > 48) return false;
+        location = location?.Trim();
+        if (location is { Length: > 48 }) return false;
         lock (_gate)
         {
             if (!_devices.TryGetValue(clientId, out var e)) return false;
             if (e.Pending && displayName.Equals("pending", StringComparison.OrdinalIgnoreCase)) return false;
             e.DisplayName = displayName;
+            if (location is not null) e.Location = location.Length == 0 ? null : location;
             Save();
             return true;
         }

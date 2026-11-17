@@ -50,6 +50,10 @@ Check(!reg.Rename("c1", "  "), "T3c blank rename rejected");
 Check(reg.Rename("c1", "LAN-PC-01"), "T3d rename accepted");
 Check(!reg.Rename("c2", "Pending"), "T3e reserved name 'pending' rejected for unnamed device");
 Check(reg.Rename("c1", "LAN-PC-01A"), "T3f rename is updateable");
+Check(reg.Rename("c1", "LAN-PC-01A", "Zone B · Row 3"), "T3g rename can stamp location (onboarding modal)");
+Check(reg.Snapshot().First(x => x.ClientId == "c1").Location == "Zone B · Row 3", "T3h location persisted on registry entry");
+Check(reg.Rename("c1", "LAN-PC-01A", ""), "T3i blank location clears without rejecting the rename");
+Check(reg.Snapshot().First(x => x.ClientId == "c1").Location is null, "T3j cleared location round-trips as null");
 
 Check(reg.TryRegister("c2", "0043", null, out var e2), "T4a second device registered");
 Check(reg.SetDowned("c2", "downed", "out-of-service", "maintenance"), "T4b downed settable before any heartbeat (queued)");
@@ -102,7 +106,8 @@ Check(await Until(async () => (await State()).devices.Any(d => d.games >= 2 && d
     "T8a agent registered + manifest reported (with duplicate flagged)");
 
 var cid = (await State()).devices[0].client_id;
-Check(await PostAck("/api/rename", new RenameRequest(cid, "LAN-PC-TEST")), "T8b operator rename via API");
+Check(await PostAck("/api/rename", new RenameRequest(cid, "LAN-PC-TEST", "Zone A · Stage 2")), "T8b operator rename via API (with location)");
+Check((await State()).devices[0].location == "Zone A · Stage 2", "T8b2 /api/state surfaces location so the dashboard shows/edits it");
 Check(await PostAck("/api/downed", new DownedRequest(cid, "downed", "out-of-service", "maintenance")), "T8c downed set via API");
 Check(await Until(async () => loop.LastDesiredState == "downed"), "T8d agent receives desired_state via heartbeat ack");
 
@@ -416,6 +421,26 @@ Check(FirstRunSetup.NormalizeServerUrl(null) is null && FirstRunSetup.NormalizeS
         "T17f missing server_url resolves by role: server binds 0.0.0.0 (LAN agents reach it), agent loopback; explicit URL wins");
 }
 
+// --- T18: station label artifact (name + location + logo slot; no pin/id/QR) ---
+{
+    var labDir = Path.Combine(AppContext.BaseDirectory, "t18-labels");
+    if (Directory.Exists(labDir)) Directory.Delete(labDir, true);
+    var lp = new EsportsUtil.Core.FileLabelPrinter(labDir);
+    var art = lp.Print("LAN-PC-07", "Zone A · Row 2 · Seat 5");
+    var html18 = File.ReadAllText(art);
+    Check(Path.GetFileName(art) == "label-lan-pc-07.html", "T18a label artifact is a single-file HTML card named from the station slug");
+    Check(html18.Contains(">LAN-PC-07</div>") && html18.Contains("Zone A"), "T18b label renders station name + venue location");
+    Check(html18.Contains("LOGO") && html18.Contains("brand slot"), "T18c label carries the logo placeholder (filled in later) where the QR used to be");
+    Check(!html18.Contains("ESU:") && !html18.Contains("0042") && !html18.Contains("11111111"), "T18d label leaks nothing machine-readable — no QR payload, no PIN, no id");
+    Check(html18.Contains("size:2in 1in") && html18.Contains("508px") && html18.Contains("254px"), "T18e label is print-ready at mockup size (2x1in, zero margins)");
+    var art2 = lp.Print("LAN-PC-07", null);
+    var html18b = File.ReadAllText(art2);
+    Check(html18b.Contains(">LAN-PC-07</div>") && !html18b.Contains("class=\"loc\""), "T18f label without a location still prints (name only, no empty loc line)");
+    var art3 = lp.Print("Shea <&> Arena “Main”", "Floor 2");
+    var html18c = File.ReadAllText(art3);
+    Check(html18c.Contains("Shea &lt;&amp;&gt; Arena") && !html18c.Contains("<&>"), "T18g hostile station name is HTML-escaped in the label artifact");
+}
+
 // ---------- T11: resource budget gate (PLAN.md) — standalone agent, idle ----------
 var perfSecs = int.TryParse(Environment.GetEnvironmentVariable("PERF_SECS"), out var ps) ? ps : 20;
 var agentBin = Path.Combine(AppContext.BaseDirectory, "esportsutil.dll");
@@ -466,7 +491,7 @@ static bool Throws<T>(Action a) where T : Exception
 
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
-file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs);
+file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null);
 file sealed record IssueDoc(string kind, string subject, string? keep_path, bool? @protected);
 file sealed record JobDoc(string job_id, string kind, string subject, string state, string? detail);
 file sealed record AlertDoc(string type, string severity);

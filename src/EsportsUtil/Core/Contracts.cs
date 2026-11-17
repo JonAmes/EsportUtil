@@ -42,7 +42,7 @@ public sealed record AckEnvelope(
     List<Directive>? Directives = null,
     Job? Job = null);
 
-public sealed record RenameRequest(string ClientId, string DisplayName);
+public sealed record RenameRequest(string ClientId, string DisplayName, string? Location = null);
 
 // ---- Jobs (schemas/job.schema.json) — structured remediation, never raw commands ----
 

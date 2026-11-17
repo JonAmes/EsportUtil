@@ -38,7 +38,8 @@ public static class ServerRole
         var manifests = new ManifestStore(cfg.DataDir);
         var content = new ContentLibrary(cfg.DataDir);
         var hub = new AlertHub();
-        var printer = new FileLabelPrinter(Path.Combine(cfg.DataDir, "labels"));
+        var labelsDir = Path.Combine(cfg.DataDir, "labels");
+        var printer = new FileLabelPrinter(labelsDir);
         var issueHashes = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
         var jobs = new JobStore(cfg.DataDir);
 
@@ -112,7 +113,7 @@ public static class ServerRole
 
         // ---- operator controls (dashboard) ----
         app.MapPost("/api/rename", (RenameRequest req) =>
-            registry.Rename(req.ClientId, req.DisplayName)
+            registry.Rename(req.ClientId, req.DisplayName, req.Location)
                 ? Results.Json(new AckEnvelope(true), Wire.Options)
                 : Results.Json(new AckEnvelope(false, "unknown device or invalid name"), Wire.Options, statusCode: 400));
 
@@ -131,8 +132,19 @@ public static class ServerRole
         {
             var e = registry.Snapshot().FirstOrDefault(x => x.ClientId == clientId);
             if (e is null) return Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404);
-            var path = printer.Print(string.IsNullOrEmpty(e.DisplayName) ? e.DevicePin : e.DisplayName, e.DevicePin, e.ClientId);
-            return Results.Json(new { ok = true, artifact = path }, Wire.Options);
+            if (e.Pending) return Results.Json(new AckEnvelope(false, "name this device (and set its location) before printing its label"), Wire.Options, statusCode: 400);
+            var path = printer.Print(e.DisplayName, e.Location);
+            return Results.Json(new { ok = true, artifact = path, url = "/labels/" + Path.GetFileName(path) }, Wire.Options);
+        });
+
+        // Serve generated label artifacts (filenames are server-made slugs; validate to be safe).
+        app.MapGet("/labels/{file}", (string file) =>
+        {
+            if (!file.EndsWith(".html", StringComparison.OrdinalIgnoreCase)
+                || !file.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.'))
+                return Results.NotFound();
+            var path = Path.Combine(labelsDir, file);
+            return System.IO.File.Exists(path) ? Results.File(path, "text/html") : Results.NotFound();
         });
 
         // ---- content library ----
@@ -236,6 +248,7 @@ public static class ServerRole
                     client_id = e.ClientId,
                     device_pin = e.DevicePin,
                     display_name = e.Pending ? $"#{e.DevicePin}" : e.DisplayName,
+                    location = e.Location,
                     pending = e.Pending,
                     online = hbAgo is not null && hbAgo <= cfg.HeartbeatTimeoutSec,
                     last_heartbeat_sec_ago = hbAgo is null ? (double?)null : Math.Round(hbAgo.Value, 1),
