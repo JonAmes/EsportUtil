@@ -794,6 +794,51 @@ var t25Dash = await probe5.GetStringAsync("/");
 Check(t25Dash.Contains(".pill.yel") && t25Dash.Contains("#eab308") && t25Dash.Contains("animation:pulse")
     && t25Dash.Contains("/api/scan-updates/") && t25Dash.Contains("wu_pending") && t25Dash.Contains("scanUpdates("),
     "T25g dashboard markup: yellow (#eab308) pulsing state pill on wu_pending>0 + per-device scan-updates wiring");
+
+// ---------- T26: wallpaper drift detection on the beat + sync pill re-applies the enforced image ----------
+// Same live pair (agent5 + app5). Linux dev surface: the desktop's "current wallpaper" is the
+// Current path in agent5's wallpaper-state.json (Wallpaper.Apply wrote it), so corrupting the
+// applied cache file IS the drift signal the Windows registry path would give.
+var agDir5 = agCfg5.DataDir;
+var t26Up = await probe5.PostAsync("/settings/wallpaper", new ByteArrayContent(t23Png));
+Check((int)t26Up.StatusCode == 200
+    && await Until(async () => Wallpaper.Read(agDir5)?.Current is { Length: > 0 } c && File.Exists(c), 20),
+    "T26a uploading a venue wallpaper on the server makes agent5 download + apply it (content pipeline, idempotent per key)");
+var t26Path = Wallpaper.Read(agDir5)!.Current!;
+var t26Sha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(t26Path))).ToLowerInvariant();
+Check(t26Sha == Convert.ToHexString(SHA256.HashData(t23Png)).ToLowerInvariant()
+    && await Until(async () => !(await State5()).devices.First(x => x.client_id == cid5).wallpaper_drift, 10),
+    "T26b in-sync report: expected sha = venue image sha, wallpaper_drift false on /api/state");
+File.AppendAllText(t26Path, "\u0000");   // simulate tamper/user change of the enforced file
+Check(await Until(async () => (await State5()).devices.First(x => x.client_id == cid5).wallpaper_drift, 15),
+    "T26c drift detected on the next beat: changed file hash ≠ enforced sha → flip forces a prompt report → wallpaper_drift true");
+var t26Nope = await probe5.PostAsync("/api/sync-wallpaper/nope", new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+var t26Sync = await probe5.PostAsync($"/api/sync-wallpaper/{cid5}", new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+Check((int)t26Nope.StatusCode == 404 && (int)t26Sync.StatusCode == 200
+    && await Until(async () =>
+    {
+        var d = (await State5()).devices.First(x => x.client_id == cid5);
+        return !d.wallpaper_drift
+            && Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Wallpaper.Read(agDir5)!.Current!))).ToLowerInvariant() == t26Sha;
+    }, 20),
+    "T26d sync pill wiring: POST /api/sync-wallpaper (unknown device 404) queues sync_wallpaper → agent re-validates cache against the manifest sha (corrupted file re-downloaded, self-healed) and drift clears");
+var t26Del = await probe5.DeleteAsync("/settings/wallpaper");
+Check((int)t26Del.StatusCode == 200
+    && await Until(async () =>
+    {
+        var d = (await State5()).devices.First(x => x.client_id == cid5);
+        return !d.wallpaper_drift && WallpaperWatch.ExpectedSha256 is null && Wallpaper.Read(agDir5)?.Current is null;
+    }, 20),
+    "T26e removing the venue wallpaper restores the baseline, un-enforces drift (expected sha cleared), pill logic stays quiet");
+var t26Dash = await probe5.GetStringAsync("/");
+Check(t26Dash.Contains(".btn.yel") && t26Dash.Contains("animation:pulse") && t26Dash.Contains("wallpaper_drift")
+    && t26Dash.Contains("syncWallpaper(") && t26Dash.Contains("/api/sync-wallpaper/"),
+    "T26f dashboard markup: yellow pulsing sync pill-button rendered only on wallpaper_drift, wired to /api/sync-wallpaper");
+Check(t26Dash.Contains("id=\"off-modal\"") && t26Dash.Contains("id=\"off-pin\"")
+    && t26Dash.Contains("re-type the station's PIN") && t26Dash.Contains("PIN does not match")
+    && t26Dash.Contains("confirmOffboard(") && !t26Dash.Contains("if (!confirm("),
+    "T27 offboarding opens a modal demanding PIN re-entry (blocked on mismatch) instead of the one-Enter confirm()");
+WallpaperWatch.Reset();
 cts5.Cancel(); await loopTask5; await app5.StopAsync();
 
 Directory.Delete(tmp, true);
@@ -818,7 +863,7 @@ static bool Throws<T>(Action a) where T : Exception
 
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
-file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null);
+file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null, bool wallpaper_drift = false);
 
 /// <summary>Fake sticky-overlay child for T21: Alive flips when staff "bypasses" on the machine;
 /// WasKilled records the operator-driven clear. The agent loop supervises this handle each ack.</summary>

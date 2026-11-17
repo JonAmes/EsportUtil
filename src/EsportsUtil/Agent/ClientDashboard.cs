@@ -29,7 +29,8 @@ public sealed record LocalStatus(
     List<GameReport> Games,
     List<DuplicateReport> Duplicates,
     List<Job> RecentJobs,
-    JsonNode? WindowsUpdate);               // machine_state.windowsUpdate passthrough; null = never polled
+    JsonNode? WindowsUpdate,               // machine_state.windowsUpdate passthrough; null = never polled
+    JsonNode? WallpaperSync);              // machine_state.wallpaperSync passthrough; null = nothing enforced
 
 /// <summary>The client operator view (PLAN.md: agent role serves it from a small localhost listener,
 /// default port 4310). Loopback-only: this PC's own browser — the fleet view stays on the server.
@@ -129,6 +130,7 @@ public sealed class ClientDashboard
             rep?.GameReports ?? new(), rep?.Duplicates ?? new(),
             loop.RecentJobs.ToList(),
             // detached copy — a JsonNode can't be re-parented into the status object directly
-            rep?.MachineState?["windowsUpdate"] is JsonObject wuNode ? JsonNode.Parse(wuNode.ToJsonString()) : null);
+            rep?.MachineState?["windowsUpdate"] is JsonObject wuNode ? JsonNode.Parse(wuNode.ToJsonString()) : null,
+            rep?.MachineState?["wallpaperSync"] is JsonObject wsNode ? JsonNode.Parse(wsNode.ToJsonString()) : null);
     }
 }

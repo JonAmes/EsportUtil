@@ -30,6 +30,9 @@ public static class StateModule
             // Last Windows Update poll outcome (agent loop owns the cadence; the record embeds the
             // cache). Key absent until the first poll — the server pill then stays plain green.
             ["windowsUpdate"] = UpdateWatch.Last?.ToNode(),
+            // Wallpaper drift verdict vs the enforced target (agent loop checks every beat). Key
+            // absent while nothing is enforced — the user owns the desktop then.
+            ["wallpaperSync"] = WallpaperWatch.Last?.ToNode(),
         };
     }
 

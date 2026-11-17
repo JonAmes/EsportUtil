@@ -22,6 +22,11 @@ public sealed class RegistryEntry
     public string? WuStatus { get; set; }        // ok | updates | error | unsupported
     public int? WuPending { get; set; }
     public long? WuScanUnix { get; set; }
+    // Wallpaper drift verdict from an agent report (machine_state.wallpaperSync): true only when an
+    // enforced target exists AND the desktop's wallpaper file no longer hashes to it.
+    public bool WpDrift { get; set; }
+    public string? WpExpectedSha { get; set; }
+    public string? WpActualSha { get; set; }
 
     [JsonIgnore] public List<Directive> PendingDirectives { get; set; } = new();
 
@@ -147,6 +152,19 @@ public sealed class DeviceRegistry
             if (!_devices.TryGetValue(clientId, out var e)) return;
             if (e.WuStatus == status && e.WuPending == pending && e.WuScanUnix == scanUnix) return;
             e.WuStatus = status; e.WuPending = pending; e.WuScanUnix = scanUnix;
+            Save();
+        }
+    }
+
+    /// <summary>Store the latest wallpaper drift verdict from an accepted report (no-op on
+    /// unchanged triples so heartbeats don't rewrite the registry file every beat).</summary>
+    public void SetWallpaperState(string clientId, bool drift, string? expectedSha, string? actualSha)
+    {
+        lock (_gate)
+        {
+            if (!_devices.TryGetValue(clientId, out var e)) return;
+            if (e.WpDrift == drift && e.WpExpectedSha == expectedSha && e.WpActualSha == actualSha) return;
+            e.WpDrift = drift; e.WpExpectedSha = expectedSha; e.WpActualSha = actualSha;
             Save();
         }
     }

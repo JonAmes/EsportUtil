@@ -12,7 +12,7 @@
     "agent_version": { "type": "string" },
     "machine_state": {
       "type": "object",
-      "description": "Opaque passthrough of the agent State Module's Record JSON (computerName, machineManufacturer, machineModel, displays, startup items, StartupApproved state, screensaver, wallpaper, software inventory incl. full Uninstall-key entries, windowsUpdate summary {status, pending_count, last_scan_unix, error} from the agent's Windows Update poll). Single owner: the agent's State Module.",
+      "description": "Opaque passthrough of the agent State Module's Record JSON (computerName, machineManufacturer, machineModel, displays, startup items, StartupApproved state, screensaver, wallpaper, software inventory incl. full Uninstall-key entries, windowsUpdate summary {status, pending_count, last_scan_unix, error} from the agent's Windows Update poll, wallpaperSync verdict {drift, expected_sha256, actual_sha256} from the agent's per-beat wallpaper drift check; null/absent when never polled / nothing enforced). Single owner: the agent's State Module.",
       "additionalProperties": true
     },
     "game_reports": {

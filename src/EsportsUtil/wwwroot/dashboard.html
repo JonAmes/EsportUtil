@@ -77,6 +77,7 @@ td:first-child{min-width:240px}
 .pill.yel{color:var(--yel);border-color:color-mix(in srgb,var(--yel) 40%,transparent);background:color-mix(in srgb,var(--yel) 10%,transparent);animation:pulse 1.3s infinite}
 .btn{border:1px solid var(--bdr);background:color-mix(in srgb,var(--fg) 4%,transparent);color:var(--fg);border-radius:6px;padding:4px 11px;font-size:12px;font-weight:510;cursor:pointer;transition:all .15s}
 .btn.danger:hover{border-color:#f87171;color:#f87171;background:color-mix(in srgb,#f87171 8%,transparent)}
+.btn.yel{border-radius:999px;border-color:rgba(234,179,8,.45);color:var(--yel);background:rgba(234,179,8,.08);animation:pulse 1.3s infinite}
 .pinx{cursor:pointer}
 .pinx:hover{outline:1px dashed var(--bad,#f87171);outline-offset:2px}
 .btn:hover{background:var(--acc);border-color:var(--acc);color:#fff}
@@ -128,6 +129,11 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
   .mbtn{border:1px solid var(--bdr);background:transparent;color:var(--fg);border-radius:8px;
         padding:8px 14px;font-size:12.5px;cursor:pointer}
   .mbtn.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:590}
+  .mbtn.dang{background:#f87171;border-color:#f87171;color:#fff;font-weight:590}
+  .mbtn:disabled{opacity:.35;cursor:default}
+  .mnote{color:var(--mut);font-size:12.5px;line-height:1.55}
+  .merr{color:#f87171;font-size:12px;font-weight:510}
+  .mbox input.pin{font-family:ui-monospace,monospace;letter-spacing:.4em;text-align:center}
 </style>
 </head>
 <body>
@@ -201,6 +207,21 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
     </div>
   </div>
 </div>
+<div class="modal" id="off-modal" hidden onclick="if(event.target===this)closeOffboard()">
+  <div class="mbox">
+    <div class="mtitle" id="off-title">Offboard station?</div>
+    <div class="mnote">This removes the PC from the fleet and <b>permanently revokes its PIN and identity</b>
+      — that client_id can never re-register. If the agent is still running on the machine it will mint a
+      new identity and return as an unnamed pending device. To proceed, re-type the station's PIN below.</div>
+    <input id="off-pin" class="pin" placeholder="____" maxlength="4" inputmode="numeric" autocomplete="off"
+           oninput="document.getElementById('off-go').disabled=this.value.trim().length!==4">
+    <div class="merr" id="off-err" hidden></div>
+    <div class="mrow">
+      <button class="mbtn" onclick="closeOffboard()">cancel</button>
+      <button class="mbtn dang" id="off-go" onclick="confirmOffboard()" disabled>revoke &amp; offboard</button>
+    </div>
+  </div>
+</div>
 <script>
 async function api(path, body){
   const r = await fetch(path, body ? {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)} : {});
@@ -223,7 +244,10 @@ async function saveRename(){
                             location:document.getElementById('rn-loc').value.trim()});
   closeRename(); refresh();
 }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRename(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape'){ closeRename(); closeOffboard(); }
+  if (e.key === 'Enter' && !document.getElementById('off-modal').hidden && !document.getElementById('off-go').disabled) confirmOffboard();
+});
 async function toggleDown(cid, on){
   await api('/api/downed',{client_id:cid, desired_state: on ? 'downed' : 'active',
     downed_content_id: on ? 'out-of-service' : null});
@@ -231,15 +255,34 @@ async function toggleDown(cid, on){
 }
 async function locate(cid){ await api('/api/locate/'+cid, {}); refresh(); }
 async function scanUpdates(cid){ await api('/api/scan-updates/'+cid, {}); refresh(); }
+async function syncWallpaper(cid){ await api('/api/sync-wallpaper/'+cid, {}); refresh(); }
 
 let _devById = {};
-async function offboard(cid){
+// Offboarding is permanent (identity tombstoned), so a bare confirm() is too easy to blow through:
+// a modal requires the station's 4-digit PIN to be RE-TYPED before the call fires.
+let _offCid = null, _offPin = '';
+function offboard(cid){
   const dev = _devById[cid] || {};
-  const label = dev.display_name && !dev.pending ? dev.display_name : 'PIN ' + (dev.device_pin || '?');
-  if (!confirm('Offboard ' + label + '?\n\nThis removes it from the fleet and REVOKES its PIN and identity — that client_id can never re-register.\nIf the agent is still running on the PC, it will mint a new identity and return as an unnamed PENDING device that you must name (or offboard again).')) return;
-  const r = await api('/api/offboard/' + cid, {});
+  _offCid = cid; _offPin = dev.device_pin || '';
+  document.getElementById('off-title').textContent =
+    'Offboard ' + (dev.display_name && !dev.pending ? dev.display_name : 'PIN ' + (_offPin || '?')) + '?';
+  const i = document.getElementById('off-pin');
+  i.value = '';
+  document.getElementById('off-err').hidden = true;
+  document.getElementById('off-go').disabled = true;
+  document.getElementById('off-modal').hidden = false;
+  i.focus();
+}
+function closeOffboard(){ document.getElementById('off-modal').hidden = true; _offCid = null; _offPin = ''; }
+async function confirmOffboard(){
+  const v = document.getElementById('off-pin').value.trim();
+  const err = document.getElementById('off-err');
+  if (v !== _offPin){ err.textContent = 'PIN does not match — offboard blocked.'; err.hidden = false;
+    const i = document.getElementById('off-pin'); i.value = ''; i.focus();
+    document.getElementById('off-go').disabled = true; return; }
+  const r = await api('/api/offboard/' + _offCid, {});
   if (r && r.ok === false) alert(r.error || 'offboard failed');
-  refresh();
+  closeOffboard(); refresh();
 }
 async function printLabel(cid){
   const r = await api('/api/print-label/'+cid, {});
@@ -322,6 +365,7 @@ async function refresh(){
         <button class="btn" ${dev.online?'':'disabled'} onclick="locate('${dev.client_id}')">locate</button>
         <button class="btn" onclick="printLabel('${dev.client_id}')">label</button>
         <button class="btn" ${dev.online?'':'disabled'} title="Poll Windows Update now — the agent scans on its next beat and the result rides its next report (timed polls run on their own interval)" onclick="scanUpdates('${dev.client_id}')">updates</button>
+        ${dev.wallpaper_drift?`<button class="btn yel" ${dev.online?'':'disabled'} title="Desktop wallpaper on this PC no longer matches the enforced image — the agent re-verifies and re-applies it on its next beat" onclick="syncWallpaper('${dev.client_id}')">sync</button>`:''}
         <button class="btn danger" title="Offboard this PC — remove it from the fleet and revoke its PIN" onclick="offboard('${dev.client_id}')">&#128465;</button>
       </td>
     </tr>`;

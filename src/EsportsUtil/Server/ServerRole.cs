@@ -124,6 +124,11 @@ public static class ServerRole
                     wu?["status"]?.GetValue<string>(),
                     wu?["pending_count"]?.GetValue<int?>(),
                     wu?["last_scan_unix"]?.GetValue<long?>());
+                var ws = ms["wallpaperSync"] as JsonObject;   // null = nothing enforced — clears stale drift
+                registry.SetWallpaperState(report.ClientId,
+                    ws?["drift"]?.GetValue<bool>() ?? false,
+                    ws?["expected_sha256"]?.GetValue<string>(),
+                    ws?["actual_sha256"]?.GetValue<string>());
             }
             return Results.Json(new AckEnvelope(true), Wire.Options);
         });
@@ -165,6 +170,15 @@ public static class ServerRole
         // agent polls WUA on the next beat and the fresh summary rides its next report.
         app.MapPost("/api/scan-updates/{clientId}", (string clientId) =>
             registry.QueueDirective(clientId, new Directive("scan_updates", null,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 300))
+                ? Results.Json(new AckEnvelope(true), Wire.Options)
+                : Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404));
+
+        // Operator-requested wallpaper re-sync: one-shot sync_wallpaper directive (TTL 5 min). The
+        // agent re-verifies its content cache against the server manifest (re-downloading on sha
+        // mismatch — heals even a corrupted cache) and re-applies the enforced image to the desktop.
+        app.MapPost("/api/sync-wallpaper/{clientId}", (string clientId) =>
+            registry.QueueDirective(clientId, new Directive("sync_wallpaper", null,
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 300))
                 ? Results.Json(new AckEnvelope(true), Wire.Options)
                 : Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404));
@@ -392,6 +406,7 @@ public static class ServerRole
                     wu_status = e.WuStatus,
                     wu_pending = e.WuPending,
                     wu_scan_min_ago = e.WuScanUnix is null ? (double?)null : Math.Round((now.ToUnixTimeSeconds() - e.WuScanUnix.Value) / 60.0, 1),
+                    wallpaper_drift = e.WpDrift,
                     games = sum?.GameCount,
                     duplicates = sum?.DuplicateCount,
                     agent_version = sum?.AgentVersion,

@@ -147,6 +147,8 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
     private bool _downOverlayDismissed;
     private string? _lastHash;
     private string? _wallpaperKey;   // desired wallpaper currently applied: content_id while downed, "venue@<sha>" for the venue upload
+    private bool _forceWallpaper;    // sync_wallpaper directive: re-run convergence even if the key is unchanged
+    private bool _wpDriftShown;      // last drift verdict reported to the server (flip → force a report)
     private DateTime _reportNow = DateTime.MinValue;
 
     public async Task RunAsync(CancellationToken ct)
@@ -223,6 +225,11 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                                     UpdateWatch.RequestScan();
                                     Console.WriteLine("scan_updates directive → Windows Update poll requested");
                                 }
+                                else if (d.Type == "sync_wallpaper")
+                                {
+                                    _forceWallpaper = true;   // next beat re-runs convergence: re-verify cache, re-apply
+                                    Console.WriteLine("sync_wallpaper directive → desired wallpaper will be re-applied");
+                                }
                                 else
                                     Console.WriteLine($"directive '{d.Type}' received (expires {d.ExpiresUnix})");
                         }
@@ -239,6 +246,19 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                                 Console.WriteLine($"windows-update poll → {wu?.Status}{pend}");
                                 _reportNow = DateTime.UtcNow;
                             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+                        // Wallpaper drift: the desktop can move off the enforced image after we apply
+                        // it (user changes wallpaper, applied file tampered). Evaluate every beat;
+                        // a drift flip forces a prompt report so the dashboard sync pill appears
+                        // (or clears) within seconds.
+                        var wp = WallpaperWatch.Check(cfg.DataDir);
+                        if ((wp?.Drift ?? false) != _wpDriftShown)
+                        {
+                            _wpDriftShown = wp?.Drift ?? false;
+                            _reportNow = DateTime.UtcNow;
+                            Console.WriteLine(_wpDriftShown
+                                ? "wallpaper drift — desktop no longer matches the enforced image"
+                                : "wallpaper back in sync (or target removed)");
+                        }
                         if (ack.Job is { } job)
                         {
                             Console.WriteLine($"job {job.Kind} '{job.Subject}' started ({job.JobId[..8]})");
@@ -297,15 +317,21 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
             {
                 Wallpaper.Restore(cfg.DataDir);
                 _wallpaperKey = null;
+                WallpaperWatch.SetExpected(null);
                 Console.WriteLine("wallpaper: no target — baseline restored");
             }
             return;
         }
-        if (key == _wallpaperKey) return;
+        if (key == _wallpaperKey && !_forceWallpaper) return;
+        _forceWallpaper = false;
         var (ok, pathOrErr) = await runner.EnsureContentAsync(contentId!, ct);
         if (!ok) { Console.WriteLine($"wallpaper: {pathOrErr}"); return; }
         Wallpaper.Apply(pathOrErr, cfg.DataDir, contentId);
         _wallpaperKey = key;
+        // sha recorded at apply time — the cache file was just verified against the server
+        // manifest by EnsureContent, so this is the authoritative "what the desktop should show".
+        WallpaperWatch.SetExpected(Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(pathOrErr))).ToLowerInvariant());
         Console.WriteLine($"wallpaper applied: {key}");
     }
 
