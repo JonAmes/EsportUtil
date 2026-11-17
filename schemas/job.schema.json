@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "esportsutil/job.schema.json",
+  "title": "Job — a structured, allow-listed remediation command queued by the server and executed by the agent",
+  "description": "Jobs are DATA, never raw command strings. The server validates each job against the device's current issues, the Master Manifest allow-lists, and the software policy before queueing; the agent re-validates locally before executing. Delivery: the next queued job rides the heartbeat ack (one in flight per machine); the agent reports state transitions back on /api/job_update.",
+  "type": "object",
+  "required": ["job_id", "client_id", "kind", "subject", "state", "created_unix"],
+  "properties": {
+    "job_id": { "type": "string", "description": "server-minted UUID" },
+    "client_id": { "type": "string" },
+    "kind": {
+      "enum": ["update_game", "cleanup_duplicate", "remove_software", "deploy_content"],
+      "description": "allow-listed handler names; unknown kinds are rejected at creation and at execution"
+    },
+    "subject": {
+      "type": "string",
+      "description": "what the job targets by name: game_id | app display_name (reported inventory entry) | content_id"
+    },
+    "arg": {
+      "type": ["string", "null"],
+      "description": "handler parameter: update_game = Steam app_id (digits only, must come from the Master Manifest allow-list); deploy_content = sha256; null otherwise"
+    },
+    "path": {
+      "type": ["string", "null"],
+      "description": "target filesystem path: update_game = install dir (from report or factory baseline); cleanup_duplicate = keep-path (all other copies for that game_id get removed)"
+    },
+    "state": { "enum": ["queued", "running", "succeeded", "failed", "cancelled"] },
+    "detail": { "type": ["string", "null"], "description": "human-readable result/error line" },
+    "created_unix": { "type": "integer" },
+    "started_unix": { "type": ["integer", "null"] },
+    "finished_unix": { "type": ["integer", "null"] }
+  }
+}

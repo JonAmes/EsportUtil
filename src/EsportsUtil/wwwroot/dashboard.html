@@ -43,6 +43,9 @@ tr.downed td:last-child,tr.downed td.swcell{opacity:1}
 th{white-space:nowrap}
 .chip{display:inline-block;font-size:11.5px;padding:1px 7px;margin:1px 3px 1px 0;border:1px solid var(--bdr);border-radius:9px;white-space:nowrap;max-width:170px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
 .chip.up{color:var(--accent)} .chip.rb,.chip.un{color:var(--crit)} .chip.mi,.chip.ung{color:var(--mut)} .chip.ok{color:var(--ok)}
+.chip.act{cursor:pointer;border-style:dashed} .chip.act:hover{border-color:var(--acc);color:var(--acc)}
+.jobline{font-size:11px;color:var(--mut);margin-top:2px;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .jobline.succeeded{color:var(--ok)} .jobline.failed{color:var(--crit)} .jobline.running{color:var(--accent)}
+#jobstat{font-size:12px;min-height:16px;margin:6px 0}
 .dup{color:var(--warn);font-size:11.5px}
 </style>
 </head>
@@ -66,6 +69,7 @@ th{white-space:nowrap}
     <tbody id="rows"><tr><td colspan="9" style="color:var(--mut)">connecting to server…</td></tr></tbody>
   </table>
 
+  <div id="jobstat"></div>
   <div class="alerts"><div class="k" style="color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Recent alerts</div><div id="alerts"></div></div>
   <div class="foot">rename, downed and locate act live against the device registry — downed applies on the agent's next heartbeat ack; locate is a one-shot directive with TTL.</div>
 </div>
@@ -86,6 +90,16 @@ async function toggleDown(cid, on){
 }
 async function locate(cid){ await api('/api/locate/'+cid, {}); refresh(); }
 async function printLabel(cid){ const r = await api('/api/print-label/'+cid, {}); if(r.artifact) alert('label artifact: '+r.artifact); }
+const FIXABLE = {update_required:'update_game', missing_from_machine:'update_game', duplicate_resolved:'cleanup_duplicate', unapproved_app:'remove_software'};
+async function fixJob(cid, kind, subjEnc){
+  const subject = decodeURIComponent(subjEnc);
+  const r = await api('/api/jobs', {client_id: cid, kind, subject});
+  const el = document.getElementById('jobstat');
+  el.textContent = r.ok ? `job queued: ${kind} · ${subject} (${(r.job_id||'').slice(0,8)}) — agent picks it up on next heartbeat`
+                       : `job rejected: ${r.error || 'server error'}`;
+  el.style.color = r.ok ? 'var(--ok)' : 'var(--crit)';
+  refresh();
+}
 
 function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
@@ -108,14 +122,19 @@ async function refresh(){
     const kindLbl = {update_required:'↑', rollback_required:'↓', missing_from_machine:'＋', unmanaged_game:'?', unapproved_app:'⚠', duplicate_resolved:'dup'};
     const issues = dev.issues || [];
     const chips = issues.length
-      ? issues.map(i => `<span class="chip ${kindCls[i.kind]||'ung'}" title="${esc(i.kind)}: ${esc(i.subject)}${i.reported_version?` (now ${i.reported_version}, want ${i.wanted_version})`:i.wanted_version?` (want ${i.wanted_version})`:''}${i.keep_path?` — keep ${i.keep_path}`:''}${i.protected?' [protected]':''}">${kindLbl[i.kind]||i.kind}${i.kind==='unapproved_app'&&i.protected?'🔒':''} ${esc(i.subject)}</span>`).join('')
+      ? issues.map(i => {
+          const fix = FIXABLE[i.kind] && !(i.kind === 'unapproved_app' && i.protected);
+          return `<span class="chip ${kindCls[i.kind]||'ung'}${fix?' act':''}"${fix?` onclick="fixJob('${dev.client_id}','${FIXABLE[i.kind]}','${encodeURIComponent(i.subject)}')"`:''} title="${esc(i.kind)}: ${esc(i.subject)}${i.reported_version?` (now ${i.reported_version}, want ${i.wanted_version})`:i.wanted_version?` (want ${i.wanted_version})`:''}${i.keep_path?` — keep ${i.keep_path}`:''}${i.protected?' [protected]':''}${fix?' — click to enqueue fix job':''}">${kindLbl[i.kind]||i.kind}${i.kind==='unapproved_app'&&i.protected?'🔒':''} ${esc(i.subject)}</span>`;
+        }).join('')
       : (dev.games ? '<span class="chip ok">✓</span>' : '<span style="color:var(--mut)">—</span>');
+    const jobs = (dev.jobs || []).slice(0,3).map(j =>
+      `<div class="jobline ${j.state}" title="${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}">${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}</div>`).join('');
     return `<tr class="${dn?'downed':''}">
       <td><a href="#" style="color:inherit;text-decoration:none" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`});return false">${esc(dev.display_name)}${dev.pending?' <span class="pin">(awaiting name)</span>':''}</a>${dupNote}</td>
       <td class="pin">${esc(dev.device_pin)}</td>
       <td>${esc(dev.machine_model ?? '—')}</td>
       <td>${dev.games ?? '—'}</td>
-      <td>${chips}</td>
+      <td>${chips}${jobs}</td>
       <td>${ago}</td>
       <td>
         <span class="pill ${dn?'':'ok'}" ${dn?'hidden':''}>active</span>

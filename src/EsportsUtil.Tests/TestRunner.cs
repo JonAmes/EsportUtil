@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using EsportsUtil.Agent;
 using EsportsUtil.Core;
@@ -209,6 +210,121 @@ Check(delivered.SequenceEqual(new[] { "a1", "boom", "a2" }),
     "T12d notifier throw does not stop the queue (order preserved, delivery continues)");
 await notifySvc.StopAsync(CancellationToken.None);
 
+// ---------- T13: Phase 4 units — job-runner guards, job store durability, wallpaper primitive ----------
+var argv13 = JobRunner.SteamCmdArgs("/games/cs2", "730");
+Check(argv13[0] == "+force_install_dir" && argv13[1] == "/games/cs2"
+    && argv13.IndexOf("+force_install_dir") < argv13.IndexOf("+app_update") && argv13.Contains("validate") && argv13[^1] == "+quit",
+    "T13a steamcmd argv is structured: force_install_dir first, validate, quit");
+Check(Throws<ArgumentException>(() => JobRunner.SteamCmdArgs("/x", "730 && rm -rf /"))
+    && Throws<ArgumentException>(() => JobRunner.SteamCmdArgs("/x", ""))
+    && Throws<ArgumentException>(() => JobRunner.SteamCmdArgs("  ", "730")),
+    "T13b app-id digits-only + install-dir required — command injection impossible");
+Check(JobRunner.DuplicateCleanupPlan(new[] { "/g/cs2/a", "/g/cs2/b" }, "/g/cs2/a").SequenceEqual(new[] { "/g/cs2/b" })
+    && JobRunner.DuplicateCleanupPlan(new[] { "/g/cs2/a" }, "/G/CS2/A").Count == 0,
+    "T13c cleanup deletes only non-keep copies; keep match is case-insensitive");
+Check(Throws<InvalidOperationException>(() => JobRunner.DuplicateCleanupPlan(new[] { "/g/cs2/a" }, "/g/cs2/gone")),
+    "T13d cleanup refuses when keep-path is no longer on disk — never deletes the wrong copy");
+Check(JobRunner.PickUninstall("X", "/q /silent", "/u") == "/q /silent"
+    && JobRunner.PickUninstall("X", null, "/u") == "/u"
+    && JobRunner.PickUninstall("X", null, null)!.StartsWith("winget"),
+    "T13e uninstall precedence: quiet > interactive > winget last resort");
+
+var jd13 = Path.Combine(tmp, "jobs13");
+var js1 = new JobStore(jd13);
+var j1 = js1.Enqueue("c1", "cleanup_duplicate", "e", null, "/g/a");
+var j2 = js1.Enqueue("c1", "update_game", "a", "730", "/g/a");
+Check(js1.NextQueued("c1")!.JobId == j1.JobId && js1.HasOpen("c1", "update_game", "a"),
+    "T13f oldest queued job handed out first; HasOpen dedupes creation");
+Check(js1.Update(j1.JobId, "c1", "running", null)!.State == "running"
+    && js1.Update(j1.JobId, "c1", "succeeded", "done")!.State == "succeeded"
+    && js1.Update(j1.JobId, "c1", "failed", null) is null,
+    "T13g running→succeeded stamps transitions; terminal states are final");
+var js1b = new JobStore(jd13);
+Check(js1b.ForClient("c1").Any(j => j.JobId == j1.JobId && j.State == "succeeded"),
+    "T13h Jobs.json survives a server restart (durable queue)");
+var jz = js1.Enqueue("c2", "update_game", "a", "730", "/x");
+js1.NextQueued("c2"); js1.Update(jz.JobId, "c2", "running", null);
+Check(js1.FailAbandoned(0).Count == 0, "T13i running jobs inside the grace window are left alone");
+Check(js1.FailAbandoned(-10000).Count == 1 && js1.Update(jz.JobId, "c2", "succeeded", null) is null,
+    "T13j abandoned running jobs fail past timeout — fleet never stalls on a zombie job");
+
+var wpDir = Path.Combine(tmp, "wp"); Directory.CreateDirectory(wpDir);
+Wallpaper.Apply(Path.Combine(wpDir, "down.png"), wpDir, "out-of-service");
+Check(Wallpaper.Read(wpDir) is { Current: not null, ContentId: "out-of-service" }, "T13k downed applies wallpaper and records content_id");
+Wallpaper.Restore(wpDir);
+Check(Wallpaper.Read(wpDir)!.ContentId is null && Wallpaper.Read(wpDir)!.Current is null,
+    "T13l clear restores baseline and releases the content_id");
+
+// ---------- T14: Phase 4 E2E — server-issued jobs executed by a real agent over HTTP ----------
+var port4 = 4397; var srvUrl4 = $"http://127.0.0.1:{port4}"; var srvDir4 = Path.Combine(tmp, "srv4");
+Directory.CreateDirectory(Path.Combine(srvDir4, "content"));
+File.WriteAllText(Path.Combine(srvDir4, "MasterManifest.json"), Wire.ToJson(new MasterManifest(1, DateTimeOffset.UtcNow,
+    new List<MasterGame> { new("dota_2", "7.11", AppId: "570"), new("counter_strike_2", "2.1.0.3"), new("fortnite", "1.0") }, new())));
+var png = new byte[] { 0x89, 0x50, 0x4E, 0x47 }; var pngSha = Convert.ToHexString(SHA256.HashData(png)).ToLowerInvariant();
+File.WriteAllBytes(Path.Combine(srvDir4, "content", "down-oos.png"), png);
+File.WriteAllText(Path.Combine(srvDir4, "ContentManifest.json"), Wire.ToJson(new ContentManifest(1, DateTimeOffset.UtcNow,
+    new List<ContentItem> { new("down-oos", "down-oos.png", pngSha, "wallpaper") })));
+var srvCfg4 = new EsportsConfig { Role = "server", ServerUrl = srvUrl4, DataDir = srvDir4 };
+using var app4 = ServerRole.BuildApp(srvCfg4); await app4.StartAsync();
+using var probe4 = new HttpClient { BaseAddress = new Uri(srvUrl4), Timeout = TimeSpan.FromSeconds(5) };
+var agentDir4 = Path.Combine(tmp, "agent4");
+var agCfg4 = new EsportsConfig { Role = "agent", ServerUrl = srvUrl4, DataDir = agentDir4 };
+agCfg4.HeartbeatIntervalSec = 1; agCfg4.SlowScanIntervalMin = 0; agCfg4.ScanDirs = new List<string> { rootA, rootB };
+agCfg4.SteamCmdPath = Path.Combine(tmp, "no-such-steamcmd");   // deterministic failure: updater absent on dev box
+using var cts4 = new CancellationTokenSource();
+var loop4 = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }, agCfg4);
+var loopTask4 = loop4.RunAsync(cts4.Token);
+
+string cid4 = ""; string dupKeep = "";
+await Until(async () =>
+{
+    var dev = (await State4()).devices.FirstOrDefault();
+    if (dev is null || dev.issues.Count == 0) return false;
+    cid4 = dev.client_id; dupKeep = dev.issues.First(i => i.kind == "duplicate_resolved").keep_path!;
+    return true;
+}, 20);
+async Task<JsonDoc> State4() => Wire.FromJson<JsonDoc>(await probe4.GetStringAsync("/api/state"))!;
+async Task<bool> PostAck4(string path, object body) =>
+    (Wire.FromJson<AckEnvelope>(await (await probe4.PostAsync(path,
+        new StringContent(Wire.ToJson(body), System.Text.Encoding.UTF8, "application/json")))
+        .Content.ReadAsStringAsync()))?.Ok == true;
+async Task<(int code, string body)> Job(string kind, string subject)
+{
+    var r = await probe4.PostAsync("/api/jobs", new StringContent(Wire.ToJson(new NewJobRequest(cid4, kind, subject)), System.Text.Encoding.UTF8, "application/json"));
+    return ((int)r.StatusCode, await r.Content.ReadAsStringAsync());
+}
+var (code4a, _) = await Job("cleanup_duplicate", "counter_strike_2");
+var (code4b, _) = await Job("cleanup_duplicate", "counter_strike_2");           // duplicate request
+var (code4c, _) = await Job("remove_software", "Chrome");                        // no such issue
+var (code4d, _) = await Job("update_game", "fortnite");                          // master game without app_id
+var (code4e, _) = await Job("update_game", "dota_2");                            // update_required issue + app_id → accepted
+Check(code4a == 200 && code4b == 409 && code4c == 400 && code4d == 400 && code4e == 200,
+    $"T14a job guards: create 200, duplicate 409, no-issue 400, no-app-id 400 (got {code4a}/{code4b}/{code4c}/{code4d}/{code4e})");
+Check(dupKeep.Length > 0, "T14b server resolved a keep-path for the duplicate before dispatch");
+
+Check(await Until(async () =>
+{
+    var jobs4 = (await State4()).devices.First().jobs ?? new();
+    return jobs4.Any(j => j.kind == "cleanup_duplicate" && j.state == "succeeded")
+        && jobs4.Any(j => j.kind == "update_game" && j.state == "failed");    // steamcmd absent → honest failure
+}, 30), "T14c real agent executed dispatched jobs via heartbeat ack (cleanup ok, update failed cleanly)");
+var copiesLeft = new[] { Path.Combine(rootA, "Counter-Strike 2"), Path.Combine(rootB, "counter_strike_2") }.Count(Directory.Exists);
+Check(copiesLeft == 1 && Directory.Exists(dupKeep),
+    "T14d exactly the non-keep duplicate copy was deleted from disk");
+Check(await Until(async () => (await State4()).alerts.Any(a => a.type == "job_succeeded")
+    && (await State4()).alerts.Any(a => a.type == "job_failed" && a.severity == "critical"), 10),
+    "T14e job outcome alerts (info success, critical failure)");
+
+await PostAck4("/api/downed", new DownedRequest(cid4, "downed", "down-oos", "qa"));
+Check(await Until(() => Task.FromResult(Wallpaper.Read(agentDir4) is { ContentId: "down-oos" }), 15),
+    "T14f downed converges on agent: content cached from library + wallpaper applied");
+Check(await Until(async () => (await probe4.GetAsync("/content/down-oos")).IsSuccessStatusCode, 5),
+    "T14g content library served the downed wallpaper bytes");
+await PostAck4("/api/downed", new DownedRequest(cid4, "active", null, null));
+Check(await Until(() => Task.FromResult(Wallpaper.Read(agentDir4)?.ContentId is null), 15),
+    "T14h returning to active restores the baseline wallpaper on the agent");
+cts4.Cancel(); await loopTask4; await app4.StopAsync();
+
 // ---------- T11: resource budget gate (PLAN.md) — standalone agent, idle ----------
 var perfSecs = int.TryParse(Environment.GetEnvironmentVariable("PERF_SECS"), out var ps) ? ps : 20;
 var agentBin = Path.Combine(AppContext.BaseDirectory, "esportsutil.dll");
@@ -252,11 +368,16 @@ static double ProcPeakRssMb(int pid)
         if (line.StartsWith("VmHWM:")) return double.Parse(line.Split(default(char[]), StringSplitOptions.RemoveEmptyEntries)[1]) / 1024.0;
     return double.MaxValue;
 }
+static bool Throws<T>(Action a) where T : Exception
+{
+    try { a(); return false; } catch (T) { return true; }
+}
 
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
-file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues);
-file sealed record IssueDoc(string kind, string subject);
+file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs);
+file sealed record IssueDoc(string kind, string subject, string? keep_path, bool? @protected);
+file sealed record JobDoc(string job_id, string kind, string subject, string state, string? detail);
 file sealed record AlertDoc(string type, string severity);
 
 file sealed class RecordingNotifier(List<string> log) : EsportsUtil.Server.INotifier

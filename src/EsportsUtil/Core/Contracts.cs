@@ -39,9 +39,31 @@ public sealed record AckEnvelope(
     string? Error = null,
     string DesiredState = "active",
     string? DownedContentId = null,
-    List<Directive>? Directives = null);
+    List<Directive>? Directives = null,
+    Job? Job = null);
 
 public sealed record RenameRequest(string ClientId, string DisplayName);
+
+// ---- Jobs (schemas/job.schema.json) — structured remediation, never raw commands ----
+
+/// <summary>Server-queued, agent-executed remediation. Kind is an allow-listed handler name;
+/// Arg/Path are validated by the server at creation against the device's issues and the master/policy
+/// allow-lists, and re-validated by the agent before execution.</summary>
+public sealed record Job(
+    string JobId,
+    string ClientId,
+    string Kind,
+    string Subject,
+    string? Arg = null,
+    string? Path = null,
+    string State = "queued",
+    string? Detail = null,
+    long CreatedUnix = 0,
+    long? StartedUnix = null,
+    long? FinishedUnix = null);
+
+public sealed record NewJobRequest(string ClientId, string Kind, string Subject);
+public sealed record JobUpdateRequest(string JobId, string ClientId, string State, string? Detail = null);
 
 public sealed record DownedRequest(
     string ClientId,

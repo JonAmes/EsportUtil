@@ -40,6 +40,7 @@ public static class ServerRole
         var hub = new AlertHub();
         var printer = new FileLabelPrinter(Path.Combine(cfg.DataDir, "labels"));
         var issueHashes = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
+        var jobs = new JobStore(cfg.DataDir);
 
         builder.Services.AddHostedService(_ => new LivenessMonitor(registry, hub, cfg.HeartbeatTimeoutSec));
 
@@ -67,16 +68,31 @@ public static class ServerRole
             return Results.Json(new AckEnvelope(true, DesiredState: e.DesiredState, DownedContentId: e.DownedContentId), Wire.Options);
         });
 
-        // ---- heartbeat: ack carries desired state + any unexpired one-shot directives ----
+        // ---- heartbeat: ack carries desired state, unexpired directives, and the next queued job ----
         app.MapPost("/api/heartbeat", (HeartbeatRequest req) =>
         {
             if (!registry.Heartbeat(req.ClientId, out var e))
                 return Results.Json(new AckEnvelope(false, "unknown client_id — re-register"), Wire.Options, statusCode: 404);
+            jobs.FailAbandoned(cfg.JobTimeoutMin);   // zombie-job sweep, cheap list scan
             return Results.Json(new AckEnvelope(true,
                 DesiredState: e.DesiredState,
                 DownedContentId: e.DownedContentId,
-                Directives: registry.TakeDirectives(req.ClientId)), Wire.Options);
+                Directives: registry.TakeDirectives(req.ClientId),
+                Job: jobs.NextQueued(req.ClientId)), Wire.Options);
         });
+
+        // ---- Phase 4: shared per-client issue resolution (drives /api/state AND job-creation guards) ----
+        static List<Issue> IssuesFor(LocalManifest lm, MasterManifest master, ApprovedSoftwarePolicy? policy) =>
+            Comparator.Games(lm, master).Concat(Comparator.Software(lm, policy)).ToList();
+
+        (LocalManifest rep, List<Issue> issues)? DeviceState(string clientId)
+        {
+            var f = Path.Combine(manifests.ReportsDir, clientId + ".json");
+            if (!File.Exists(f)) return null;
+            var lm = Wire.FromJson<LocalManifest>(File.ReadAllText(f));
+            if (lm is null) return null;
+            return (lm, IssuesFor(lm, manifests.LoadMaster(), manifests.LoadPolicy()));
+        }
 
         // ---- local manifest report; content-hash dedupe so unchanged states cost ~zero ----
         app.MapPost("/api/report", (LocalManifest report) =>
@@ -127,6 +143,77 @@ public static class ServerRole
             return path is null ? Results.NotFound() : Results.File(path, "application/octet-stream");
         });
 
+        // ---- Phase 4 jobs: creation guards, agent state reports ----
+        app.MapPost("/api/jobs", (NewJobRequest req) =>
+        {
+            if (!registry.Exists(req.ClientId))
+                return Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404);
+            if (DeviceState(req.ClientId) is not { } st)
+                return Results.Json(new AckEnvelope(false, "device has never reported — nothing to remediate against"), Wire.Options, statusCode: 400);
+            if (jobs.HasOpen(req.ClientId, req.Kind, req.Subject))
+                return Results.Json(new AckEnvelope(false, "identical job already queued or running"), Wire.Options, statusCode: 409);
+
+            var master = manifests.LoadMaster();
+            string? arg = null, path = null;
+            switch (req.Kind)
+            {
+                case "update_game":
+                    // Allow-list rule: we only patch games the Master Manifest names, with a Steam app id.
+                    var mg = master.MasterList.FirstOrDefault(g => g.GameId.Equals(req.Subject, StringComparison.OrdinalIgnoreCase));
+                    if (mg is null) return Results.Json(new AckEnvelope(false, "game not in Master Manifest"), Wire.Options, statusCode: 400);
+                    if (mg.AppId is null) return Results.Json(new AckEnvelope(false, "no Steam app_id in Master Manifest — update handler unsupported for this game"), Wire.Options, statusCode: 400);
+                    if (st.issues.Any(i => i.Kind == "rollback_required" && i.Subject == req.Subject))
+                        return Results.Json(new AckEnvelope(false, "SteamCMD cannot downgrade — apply the factory baseline instead"), Wire.Options, statusCode: 400);
+                    if (!st.issues.Any(i => i.Subject == req.Subject && i.Kind is "update_required" or "missing_from_machine"))
+                        return Results.Json(new AckEnvelope(false, "no update/missing issue for that game"), Wire.Options, statusCode: 400);
+                    var iss = st.issues.First(i => i.Subject == req.Subject && i.Kind is "update_required" or "missing_from_machine");
+                    path = iss.KeepPath
+                        ?? master.FactoryStateMap.SelectMany(f => f.GameBaselines)
+                           .FirstOrDefault(b => b.GameId.Equals(req.Subject, StringComparison.OrdinalIgnoreCase))?.InstallPath;
+                    if (path is null) return Results.Json(new AckEnvelope(false, "no known install path for this game"), Wire.Options, statusCode: 400);
+                    arg = mg.AppId;
+                    break;
+                case "cleanup_duplicate":
+                    var dup = st.issues.FirstOrDefault(i => i.Kind == "duplicate_resolved" && i.Subject == req.Subject);
+                    if (dup?.KeepPath is null)
+                        return Results.Json(new AckEnvelope(false, "no server-resolved duplicate for that game"), Wire.Options, statusCode: 400);
+                    path = dup.KeepPath;
+                    break;
+                case "remove_software":
+                    var app = st.issues.FirstOrDefault(i => i.Kind == "unapproved_app" && i.Subject == req.Subject);
+                    if (app is null) return Results.Json(new AckEnvelope(false, "no unapproved_app issue for that entry"), Wire.Options, statusCode: 400);
+                    if (app.Protected) return Results.Json(new AckEnvelope(false, "entry is on the protected veto list"), Wire.Options, statusCode: 403);
+                    break;
+                case "deploy_content":
+                    if (content.Find(req.Subject) is null)
+                        return Results.Json(new AckEnvelope(false, "content_id not in library"), Wire.Options, statusCode: 400);
+                    break;
+                default:
+                    return Results.Json(new AckEnvelope(false, $"unknown job kind '{req.Kind}'"), Wire.Options, statusCode: 400);
+            }
+
+            var job = jobs.Enqueue(req.ClientId, req.Kind, req.Subject, arg, path);
+            var pin = registry.Snapshot().FirstOrDefault(x => x.ClientId == req.ClientId)?.DevicePin;
+            _ = hub.PublishAsync(new Alert("job_queued", "info", $"{req.Kind} {req.Subject}",
+                req.ClientId, pin, DateTimeOffset.UtcNow));
+            return Results.Json(job, Wire.Options);
+        });
+
+        app.MapPost("/api/job_update", (JobUpdateRequest req) =>
+        {
+            var j = jobs.Update(req.JobId, req.ClientId, req.State, req.Detail);
+            if (j is null)
+                return Results.Json(new AckEnvelope(false, "unknown job, wrong client, or terminal state"), Wire.Options, statusCode: 400);
+            if (j.State is "succeeded" or "failed")
+            {
+                var pin = registry.Snapshot().FirstOrDefault(x => x.ClientId == req.ClientId)?.DevicePin;
+                _ = hub.PublishAsync(new Alert(j.State == "succeeded" ? "job_succeeded" : "job_failed",
+                    j.State == "succeeded" ? "info" : "critical",
+                    $"{j.Kind} {j.Subject}: {j.Detail}", req.ClientId, pin, DateTimeOffset.UtcNow));
+            }
+            return Results.Json(j, Wire.Options);
+        });
+
         // ---- dashboard snapshot for the live E-Sports Dashboard ----
         app.MapGet("/api/state", () =>
         {
@@ -134,16 +221,10 @@ public static class ServerRole
             var master = manifests.LoadMaster();
             var policy = manifests.LoadPolicy();
 
-            List<LocalManifest> LoadReports()
-            {
-                var list = new List<LocalManifest>();
-                foreach (var f in Directory.GetFiles(manifests.ReportsDir, "*.json"))
-                    if (Wire.FromJson<LocalManifest>(File.ReadAllText(f)) is { } lm) list.Add(lm);
-                return list;
-            }
-            var issuesByClient = LoadReports()
-                .ToDictionary(r => r.ClientId,
-                    r => Comparator.Games(r, master).Concat(Comparator.Software(r, policy)).ToList());
+            var issuesByClient = new Dictionary<string, List<Issue>>();
+            foreach (var f in Directory.GetFiles(manifests.ReportsDir, "*.json"))
+                if (Wire.FromJson<LocalManifest>(File.ReadAllText(f)) is { } lm)
+                    issuesByClient[lm.ClientId] = IssuesFor(lm, master, policy);
 
             var devices = registry.Snapshot().OrderBy(e => e.DevicePin).Select(e =>
             {
@@ -168,6 +249,7 @@ public static class ServerRole
                     last_report = sum?.ReportTimestamp,
                     locate_pending = e.PendingDirectives.Any(d => d.ExpiresUnix > now.ToUnixTimeSeconds()),
                     issues,
+                    jobs = jobs.ForClient(e.ClientId),
                 };
             }).ToList();
 

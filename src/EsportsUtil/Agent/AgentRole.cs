@@ -92,18 +92,22 @@ public static class AgentInfo { public const string Version = "0.1.0"; }
 
 /// <summary>The agent loop: heartbeat on interval (tiny fixed payload) is the spine; reports/manifest run
 /// on the slow timer or right after register — never per heartbeat. Directives and desired_state are
-/// consumed here as data (wallpaper swap + overlay render are Phase 4 primitives).</summary>
+/// consumed here as data. Phase 4: downed state converges the wallpaper locally (content cache + SPI),
+/// and one heartbeat-acked job at a time runs through the allow-listed JobRunner with state reported back.</summary>
 public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
 {
     public string LastDesiredState { get; private set; } = "active";
     public List<Directive> ConsumedDirectives { get; } = new();
     public int ReportsSent { get; private set; }
     private string? _lastHash;
+    private string? _downedContentApplied;          // content_id of the downed wallpaper currently applied
+    private DateTime _reportNow = DateTime.MinValue;
 
     public async Task RunAsync(CancellationToken ct)
     {
         var id = Identity.LoadOrCreate(cfg.DataDir);
         var client = new AgentClient(http, cfg, id);
+        var runner = new JobRunner(http, cfg);
         Console.WriteLine($"esportsutil agent {AgentInfo.Version} — client_id={id.ClientId} pin={id.DevicePin}");
 
         var registered = false;
@@ -125,18 +129,29 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                     else
                     {
                         LastDesiredState = ack.DesiredState;
+                        await ReconcileDownedAsync(ack, runner, ct);
                         if (ack.Directives is { Count: > 0 })
                         {
                             ConsumedDirectives.AddRange(ack.Directives);
                             foreach (var d in ack.Directives)
-                                Console.WriteLine($"directive '{d.Type}' received (expires {d.ExpiresUnix}) — render is a Phase 4 primitive");
+                                Console.WriteLine($"directive '{d.Type}' received (expires {d.ExpiresUnix}) — overlay renders in the user session");
                         }
-                        if (DateTime.UtcNow >= nextReport)
+                        if (ack.Job is { } job)
+                        {
+                            Console.WriteLine($"job {job.Kind} '{job.Subject}' started ({job.JobId[..8]})");
+                            await runner.ReportJobStateAsync(job, "running", null, ct);
+                            var (ok, detail) = await runner.RunAsync(job, ct);
+                            await runner.ReportJobStateAsync(job, ok ? "succeeded" : "failed", detail, ct);
+                            Console.WriteLine($"job {job.Kind} '{job.Subject}' → {(ok ? "succeeded" : "failed")}: {detail}");
+                            if (ok) _reportNow = DateTime.UtcNow;      // prove the repair: re-report promptly
+                        }
+                        if (DateTime.UtcNow >= nextReport || DateTime.UtcNow >= _reportNow)
                         {
                             var m = await client.BuildManifestAsync(ct);
                             var hash = AgentClient.ContentHash(m);
                             if (hash != _lastHash && await client.ReportAsync(m, ct)) { _lastHash = hash; ReportsSent++; }
                             nextReport = DateTime.UtcNow.AddMinutes(cfg.SlowScanIntervalMin);
+                            _reportNow = DateTime.MaxValue;
                         }
                     }
                 }
@@ -146,6 +161,29 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
 
             try { await Task.Delay(TimeSpan.FromSeconds(cfg.HeartbeatIntervalSec), ct); }
             catch (OperationCanceledException) { break; }
+        }
+    }
+
+    /// <summary>Downed convergence (desired-state, not liveness): while downed, ensure the downed
+    /// wallpaper content is cached and applied; on return to active, restore the recorded baseline.
+    /// Idempotent — only touches the desktop when the intended wallpaper actually changes.</summary>
+    private async Task ReconcileDownedAsync(AckEnvelope ack, JobRunner runner, CancellationToken ct)
+    {
+        if (ack.DesiredState == "downed")
+        {
+            var contentId = ack.DownedContentId;
+            if (contentId is null || contentId == _downedContentApplied) return;
+            var (ok, pathOrErr) = await runner.EnsureContentAsync(contentId, ct);
+            if (!ok) { Console.WriteLine($"downed wallpaper: {pathOrErr}"); return; }
+            Wallpaper.Apply(pathOrErr, cfg.DataDir, contentId);
+            _downedContentApplied = contentId;
+            Console.WriteLine($"downed wallpaper applied ({contentId})");
+        }
+        else if (_downedContentApplied is not null)
+        {
+            Wallpaper.Restore(cfg.DataDir);
+            _downedContentApplied = null;
+            Console.WriteLine("downed cleared — baseline wallpaper restored");
         }
     }
 }
