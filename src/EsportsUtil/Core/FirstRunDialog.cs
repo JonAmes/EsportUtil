@@ -30,9 +30,9 @@ public static class FirstRunDialog
     {
         public (string, string?)? Picked { get; private set; }
 
-        private static readonly Color BaseColor = Color.FromArgb(12, 14, 20);
-        private static readonly Color PanelColor = Color.FromArgb(24, 28, 38);
-        private static readonly Color Accent = Color.FromArgb(0, 200, 255);
+        private static readonly Color BaseColor = Color.FromArgb(13, 15, 20);      // mockup #0d0f14
+        private static readonly Color PanelColor = Color.FromArgb(22, 22, 26);     // mockup card #16161a
+        private static readonly Color Accent = Color.FromArgb(109, 141, 255);      // mockup #6d8dff
 
         private readonly TextBox _url = new();
         private readonly Label _status = new();
@@ -143,13 +143,13 @@ public static class FirstRunDialog
                 Text = $"{text}\n{note}",
                 FlatStyle = FlatStyle.Flat,
                 BackColor = PanelColor,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 11f),
+                ForeColor = Color.FromArgb(230, 230, 234),
+                Font = new Font("Segoe UI", 13f, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
             };
             b.FlatAppearance.BorderColor = Accent;
             b.FlatAppearance.BorderSize = 1;
-            b.MouseEnter += (_, _) => b.BackColor = Color.FromArgb(30, 42, 56);
+            b.MouseEnter += (_, _) => b.BackColor = Color.FromArgb(35, 35, 41);
             b.MouseLeave += (_, _) => b.BackColor = PanelColor;
             return b;
         }

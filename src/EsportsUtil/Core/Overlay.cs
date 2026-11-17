@@ -52,6 +52,17 @@ public sealed record LocateOverlayRequest(string DisplayName, string DevicePin, 
     public string MetaLine() =>
         $"PIN {DevicePin} · {(Model is null ? "model unknown" : Model)} · client {ClientId[..Math.Min(8, ClientId.Length)]}";
 
+    /// <summary>Same line split into normal/strong runs — the mockup styles PIN and model emphasized
+    /// against muted separators (pure so the WinForms renderer and tests share one source).</summary>
+    public List<(string Text, bool Strong)> MetaRuns()
+    {
+        var runs = new List<(string, bool)> { ("PIN ", false), (DevicePin, true) };
+        runs.Add((" · ", false));
+        runs.Add((Model is null ? "model unknown" : Model, true));
+        runs.Add(($" · client {ClientId[..Math.Min(8, ClientId.Length)]}", false));
+        return runs;
+    }
+
     /// <summary>QR payload identical to the printed label — one scan protocol covers both surfaces.</summary>
     public string QrPayload() => FileLabelPrinter.QrPayload(ClientId, DevicePin);
 }
@@ -74,55 +85,73 @@ public static class Qr
     }
 }
 
-/// <summary>Pure stacked-flow layout for the fullscreen overlay (px sizes + Y cursors), testable on any
-/// OS. Everything auto-fits: name/meta shrink to stay inside the width budget, the QR scales to the
-/// height budget, and lines never overlap — the previous fixed-position giant text clipped/overlapped.</summary>
+/// <summary>Composition matching the approved mockup (mockups/locate_overlay.html): a horizontal card —
+/// left-aligned kicker/name/meta block beside a white rounded QR card, everything auto-fit to the
+/// viewport. Kicker/name/meta and the QR block never overlap; long names shrink instead of clipping.</summary>
 public static class OverlayLayout
 {
     public sealed record Layout(
-        float LabelSize, float LabelY,
-        float NameSize, float NameY,
-        float MetaSize, float MetaY,
-        int QrPx, float QrY, int QrModules,
-        float PayloadSize, float PayloadY,
-        float CountdownSize, float CountdownY);
+        float Scale, float BorderInset, float BorderWidth,
+        float KickerSize, float NameSize, float MetaSize,
+        float IdLeft, float KickerY, float NameY, float MetaY, float IdEstWidth,
+        float Gap, int QrModules, int QrCardPx, int QrPad, float QrX, float QrY,
+        float QrLabelSize, float QrLabelY,
+        float CountSize, float HintSize, float HintY);
 
     // Rough average advance width per char for Segoe UI (bold/regular) as a fraction of pixel size.
     private const float BoldFactor = 0.62f, RegularFactor = 0.52f;
 
-    public static Layout Compute(int w, int h, int qrModules, string name, string meta, string payloadLine)
+    public static Layout Compute(int w, int h, int qrModules, string name, string meta)
     {
-        float labelSize = Math.Clamp(h * 0.032f, 14, 34);
-        float countdownSize = Math.Clamp(h * 0.030f, 14, 28);
-        float payloadSize = Math.Clamp(h * 0.022f, 12, 22);
-        float metaSize = Math.Clamp(h * 0.030f, 14, 28);
+        float s = Math.Clamp(Math.Min(w / 1920f, h / 1080f), 0.55f, 2.2f);
+        float borderInset = 14 * s, borderWidth = 4 * s;
 
-        // Name: generous but capped, then shrink-to-fit the 80% width budget.
-        float nameSize = Math.Clamp(h * 0.10f, 28, 150);
-        float nameWidth = BoldFactor * nameSize * name.Length;
-        if (nameWidth > w * 0.80f) nameSize = Math.Max(24, nameSize * w * 0.80f / nameWidth);
+        float kickerSize = Math.Clamp(13 * s, 11, 26);
+        float metaSize = Math.Clamp(15 * s, 11, 30);
+        float nameSize = Math.Clamp(w * 0.075f, 30, 76 * s);   // mockup: clamp(34px, 7.5vw, 76px) scaled
+        float countSize = Math.Clamp(20 * s, 14, 34);
+        float qrLabelSize = Math.Clamp(12 * s, 10, 22);
+        float hintSize = Math.Clamp(12 * s, 10, 24);
+        float hintY = h - hintSize - 30 * s;
+        float gap = 44 * s;
 
-        if (RegularFactor * metaSize * meta.Length > w * 0.85f)
-            metaSize = Math.Max(12, metaSize * w * 0.85f / (RegularFactor * meta.Length));
-        if (RegularFactor * payloadSize * payloadLine.Length > w * 0.90f)
-            payloadSize = Math.Max(11, payloadSize * w * 0.90f / (RegularFactor * payloadLine.Length));
+        // White QR card (mockup 118px @1x + 10px inner padding); keep at least 3px per QR module.
+        int qrPad = Math.Max(6, (int)(10 * s));
+        int qrCard = (int)Math.Min(h * 0.34f, w * 0.42f);
+        qrCard = Math.Max(qrCard, qrModules * 3 + 2 * qrPad);
 
-        // QR: fit inside 36% of height and 45% of width (including its white pad ring of 3 modules).
-        int qrPx = Math.Clamp((int)(Math.Min(h * 0.36f, w * 0.45f) / (qrModules + 6)), 3, 14);
-        float qrOuter = qrPx * (qrModules + 6);
+        float avail = w - 2 * (borderInset + 24 * s);
+        if (qrCard > avail * 0.42f) qrCard = (int)(avail * 0.42f);
 
-        // Stack top-to-bottom; countdown pinned near the bottom.
-        float y = h * 0.08f;
-        float labelY = y; y += labelSize * 1.3f;
-        float nameY = y; y += nameSize * 1.3f + h * 0.01f;
-        float metaY = y; y += metaSize * 1.3f + h * 0.025f;
-        float qrY = y; y += qrOuter + h * 0.012f;
-        float payloadY = y;
+        // Id block width estimate; shrink name/meta to keep the horizontal card fitting.
+        float nameW = BoldFactor * nameSize * name.Length;
+        float metaW = RegularFactor * metaSize * meta.Length;
+        float idEst = Math.Max(nameW, metaW);
+        float budget = avail - gap - qrCard;
+        if (idEst > budget && budget > 0)
+        {
+            float k = budget / idEst;
+            nameSize = Math.Max(24, nameSize * k);
+            metaSize = Math.Max(11, metaSize * k);
+            idEst = Math.Max(BoldFactor * nameSize * name.Length, RegularFactor * metaSize * meta.Length);
+        }
 
-        float countdownY = h - countdownSize - h * 0.035f;
-        // Safety: if anything still overruns, callers shrink nothing further — the budgets above prevent it.
-        return new Layout(labelSize, labelY, nameSize, nameY, metaSize, metaY,
-            qrPx, qrY, qrModules, payloadSize, payloadY, countdownSize, countdownY);
+        // Vertically center the id block; QR card centered with its label hanging below.
+        float blockH = kickerSize * 1.5f + nameSize * 1.25f + metaSize * 1.4f;
+        float top = (h - blockH) / 2;
+        float kickerY = top;
+        float nameY = top + kickerSize * 1.5f;
+        float metaY = nameY + nameSize * 1.25f;
+
+        float left = Math.Max(borderInset + 24 * s, (w - (idEst + gap + qrCard)) / 2);
+        float qrX = left + idEst + gap;
+        float qrY = (h - qrCard) / 2 - qrLabelSize * 0.9f;
+
+        return new Layout(s, borderInset, borderWidth,
+            kickerSize, nameSize, metaSize, left, kickerY, nameY, metaY, idEst,
+            gap, qrModules, qrCard, qrPad, qrX, qrY,
+            qrLabelSize, qrY + qrCard + 8 * s,
+            countSize, hintSize, hintY);
     }
 }
 

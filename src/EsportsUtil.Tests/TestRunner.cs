@@ -354,24 +354,25 @@ Check(ConsoleOverlay.RenderCard(ovReq, nowT15) is var card && card.Contains("LAN
 Check(OverlayLauncher.RequestFor(new Directive("locate", null, nowT15 + 30), new AgentIdentity("abc", "0042"), null).DisplayName == "PIN 0042",
     "T15g unnamed device falls back to PIN label (never blank overlay title)");
 
-// ---------- T16: Phase 4 overlay layout math (the "text too big" regression gate) ----------
+// ---------- T16: Phase 4 overlay layout math (mockup composition fits any viewport) ----------
 foreach (var (tw, th) in new[] { (1920, 1080), (1280, 720), (3840, 2160), (1366, 768) })
 {
-    var ly = OverlayLayout.Compute(tw, th, 37, "LAN-PC-07", "PIN 0042 · Precision 7920 Tower · client 11111111", "ESU:11111111-2222-3333-4444-555555555555:0042");
-    Check(ly.NameSize <= th * 0.10f + 1 && ly.NameSize >= 24
-        && ly.LabelY + ly.LabelSize * 1.3f <= ly.NameY + 0.01f
-        && ly.NameY + ly.NameSize * 1.3f <= ly.MetaY + 0.01f
-        && ly.MetaY + ly.MetaSize * 1.3f <= ly.QrY + 0.01f
-        && ly.QrY + ly.QrPx * (ly.QrModules + 6) <= ly.PayloadY + 0.01f
-        && ly.PayloadY + ly.PayloadSize * 1.3f < ly.CountdownY
-        && ly.CountdownY + ly.CountdownSize < th
-        && (ly.QrModules + 6) * ly.QrPx <= tw * 0.46f,
-        $"T16a {tw}x{th}: stacked layout fits vertically, no line overlaps, QR within width budget");
+    var ly = OverlayLayout.Compute(tw, th, 37, "LAN-PC-07", "PIN 0042 · Precision 7920 Tower · client 11111111");
+    Check(ly.IdLeft >= ly.BorderInset - 0.01
+        && ly.QrX + ly.QrCardPx <= tw - ly.BorderInset + 0.01          // QR card never past the border
+        && ly.QrX - ly.IdLeft - ly.Gap * 0.5f >= 100                    // id block has real draw budget
+        && ly.KickerY >= 0 && ly.QrY >= 0
+        && ly.KickerY < ly.NameY && ly.NameY < ly.MetaY                 // vertical flow order holds
+        && ly.MetaY + ly.MetaSize * 1.4f <= ly.HintY + 0.01
+        && ly.QrY + ly.QrCardPx + ly.QrLabelSize * 2f <= ly.HintY + 0.01 // QR + caption clear the hint
+        && ly.QrCardPx >= 37 * 3,                                       // >=3px per QR module stays scannable
+        $"T16a {tw}x{th}: horizontal card composition fits, no overlaps, QR scannable");
     var longName = "STATION ZERO-NINE-ALPHA BRAVO CHARLIE DELTA ECHO";
-    var ly2 = OverlayLayout.Compute(tw, th, 37, longName, "PIN 0042 · Precision 7920 Tower · client 11111111", "ESU:11111111-2222-3333-4444-555555555555:0042");
-    Check(0.62f * ly2.NameSize * longName.Length <= tw * 0.81f
-        && (longName.Length * 0.62f * Math.Clamp(th * 0.10f, 28, 150) > tw * 0.80f ? ly2.NameSize < Math.Clamp(th * 0.10f, 28, 150) : true),
-        $"T16b {tw}x{th}: oversized display_name shrinks to fit 80% width (never clips)");
+    var ly2 = OverlayLayout.Compute(tw, th, 37, longName, "PIN 0042 · Precision 7920 Tower · client 11111111");
+    var fullSize = Math.Clamp(tw * 0.075f, 30, 76 * Math.Clamp(Math.Min(tw / 1920f, th / 1080f), 0.55f, 2.2f));
+    Check(0.62f * ly2.NameSize * longName.Length <= tw * 0.86f
+        && (0.62f * fullSize * longName.Length > tw * 0.86f ? ly2.NameSize < fullSize : true),
+        $"T16b {tw}x{th}: oversized display_name shrinks to fit beside the QR (never clips)");
 }
 
 // ---- first-run setup: role dialog / config generation ----
@@ -389,10 +390,11 @@ Check(FirstRunSetup.NormalizeServerUrl(null) is null && FirstRunSetup.NormalizeS
     var setupDir = Path.Combine(tmp, "first-run");
     var srv = FirstRunSetup.BuildConfig("server", null, setupDir);
     var ag = FirstRunSetup.BuildConfig("agent", "10.140.0.212", setupDir);
-    Check(srv.Role == "server" && srv.DataDir == Path.Combine(setupDir, "esportsutil-data", "server") && srv.Port == 4300 &&
+    Check(srv.Role == "server" && srv.ServerUrl == "http://0.0.0.0:4300" &&
+        srv.DataDir == Path.Combine(setupDir, "esportsutil-data", "server") && srv.Port == 4300 &&
         ag.Role == "agent" && ag.ServerUrl == "http://10.140.0.212:4300" &&
         ag.DataDir == Path.Combine(setupDir, "esportsutil-data", "agent"),
-        "T17c server keeps defaults + local data dir; agent gets normalized server_url");
+        "T17c server config pins server_url to 0.0.0.0:4300 (all NICs); agent gets normalized server_url");
     Check(Throws<ArgumentException>(() => FirstRunSetup.BuildConfig("client", null, setupDir)) &&
         Throws<ArgumentException>(() => FirstRunSetup.BuildConfig("agent", "not a url", setupDir)),
         "T17d wizard output is validated, not trusted (bad role/address throw)");
@@ -403,6 +405,15 @@ Check(FirstRunSetup.NormalizeServerUrl(null) is null && FirstRunSetup.NormalizeS
         cfgBack.Role == "agent" && cfgBack.ServerUrl == "http://10.140.0.212:4300" &&
         cfgBack.DataDir == ag.DataDir && text.Contains("\"server_url\""),
         "T17e generated file next to the exe round-trips through EsportsConfig.Load (same snake_case contract)");
+}
+{
+    var srvNoUrl = new EsportsConfig { Role = "server" }; srvNoUrl.ApplyRoleOverride(null);
+    var agNoUrl = new EsportsConfig(); agNoUrl.ApplyRoleOverride("agent");
+    var srvPort = new EsportsConfig { Role = "server", Port = 4400 }; srvPort.ApplyRoleOverride(null);
+    var srvSet = new EsportsConfig { Role = "server", ServerUrl = "http://100.92.77.66:4300" }; srvSet.ApplyRoleOverride(null);
+    Check(srvNoUrl.ServerUrl == "http://0.0.0.0:4300" && agNoUrl.ServerUrl == "http://127.0.0.1:4300"
+        && srvPort.ServerUrl == "http://0.0.0.0:4400" && srvSet.ServerUrl == "http://100.92.77.66:4300",
+        "T17f missing server_url resolves by role: server binds 0.0.0.0 (LAN agents reach it), agent loopback; explicit URL wins");
 }
 
 // ---------- T11: resource budget gate (PLAN.md) — standalone agent, idle ----------

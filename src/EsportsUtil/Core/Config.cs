@@ -7,7 +7,7 @@ namespace EsportsUtil.Core;
 public sealed class EsportsConfig
 {
     public string Role { get; set; } = "agent";                 // server | agent
-    public string ServerUrl { get; set; } = "http://127.0.0.1:4300";
+    public string ServerUrl { get; set; } = "";                  // "" = role default: server binds 0.0.0.0, agent loopback
     public int Port { get; set; } = 4300;                        // server API + dashboard bind port
     public string DataDir { get; set; } = "data";
     public List<string> ScanDirs { get; set; } = new();          // game install roots for folder scan
@@ -41,5 +41,8 @@ public sealed class EsportsConfig
         if (!string.IsNullOrEmpty(roleFlag)) Role = roleFlag;
         if (Role is not ("server" or "agent"))
             throw new ArgumentException($"--role must be server or agent, got '{Role}'");
+        // Server defaults to binding every NIC so LAN agents can reach it; agents default to loopback.
+        if (string.IsNullOrWhiteSpace(ServerUrl))
+            ServerUrl = Role == "server" ? $"http://0.0.0.0:{Port}" : $"http://127.0.0.1:{Port}";
     }
 }

@@ -64,6 +64,8 @@ public static class FirstRunSetup
         };
         if (role == "agent")
             cfg.ServerUrl = NormalizeServerUrl(serverUrl) ?? throw new ArgumentException($"invalid server address: '{serverUrl}'");
+        else
+            cfg.ServerUrl = $"http://0.0.0.0:{DefaultPort}";   // server binds all NICs so LAN agents reach it
         return cfg;
     }
 

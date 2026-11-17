@@ -5,73 +5,166 @@
 <title>E-Sports Dashboard</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-:root{--bg:#0d0f12;--card:#16191e;--fg:#eceef1;--mut:#9aa3ad;--bdr:rgba(255,255,255,.09);
---acc:#5b8cff;--ok:#3ecf8e;--warn:#f5a623;--crit:#ef5b5b;}
+/* Design system copied from the approved mockup (mockups/server_dashboard.html),
+   with the live palette pinned here since this page is served standalone. */
+:root{color-scheme:dark;
+--bg:#0d0f14;--fg:#f7f8f8;--mut:#8a8f98;--acc:#6d8dff;
+--bdr:rgba(255,255,255,.08);--card:rgba(255,255,255,.03);
+--hair:color-mix(in srgb,var(--fg) 7%,transparent);
+--ok:#10b981;--warn:#d97706;--bad:#ef4444;--info:#38bdf8;}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;align-items:center}
-.wrap{width:min(1080px,100%);min-width:560px;padding:28px 24px 40px}
-h1{font-size:20px;font-weight:700;margin:0}
-.sub{color:var(--mut);font-size:12.5px;margin:2px 0 22px}
-.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
-.card{background:var(--card);border:1px solid var(--bdr);border-radius:10px;padding:14px 16px}
-.card .k{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
-.card .v{font-size:24px;font-weight:700;margin-top:4px}
-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--bdr);border-radius:10px;overflow:hidden}
-th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);text-align:left;padding:10px 12px;border-bottom:1px solid var(--bdr)}
-td{padding:10px 12px;border-bottom:1px solid var(--bdr);vertical-align:middle}
-tr:last-child td{border-bottom:0}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;background:var(--mut)}
-.dot.on{background:var(--ok);box-shadow:0 0 6px var(--ok)}
-.dot.off{background:var(--crit)}
-.pin{font-family:ui-monospace,Consolas,monospace;color:var(--mut)}
-.btn{background:transparent;border:1px solid var(--bdr);color:var(--fg);border-radius:7px;padding:4px 10px;font-size:12px;cursor:pointer}
-.btn:hover{border-color:var(--acc);color:var(--acc)}
-.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--bdr);color:var(--mut)}
-.pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
-.pill.dn{color:var(--mut);border-style:dashed;border-color:color-mix(in srgb,var(--fg) 35%,transparent);background:color-mix(in srgb,var(--fg) 5%,transparent)}
-.pill[hidden]{display:none}
+body{margin:0;background:
+ radial-gradient(1200px 600px at 85% -10%,rgba(27,20,48,.55),transparent 60%),
+ radial-gradient(1000px 500px at -10% 110%,rgba(22,35,61,.5),transparent 60%),
+ var(--bg);
+ color:var(--fg);font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;
+ display:flex;flex-direction:column;align-items:center}
+.mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.esu{width:min(920px,100%);min-width:560px;padding:16px 14px 30px;font-variant-numeric:tabular-nums}
+
+/* header */
+.head{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--hair);padding-bottom:12px;flex-wrap:wrap}
+.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 45%,#22d3ee));display:inline-flex;align-items:center;justify-content:center;font-weight:700;color:#fff;transform:translateY(4px);box-shadow:0 0 18px color-mix(in srgb,var(--acc) 50%,transparent)}
+h1{font-size:18px;font-weight:590;letter-spacing:-.4px;margin:0}
+.chip{border:1px solid var(--bdr);border-radius:999px;padding:2px 10px;font-size:11px;color:var(--mut)}
+.chip b{color:var(--fg);font-weight:510}
+.live{margin-left:auto;font-size:11px;color:var(--mut);display:inline-flex;align-items:center;gap:6px}
+
+/* dots */
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.dot.ok{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent)}
+.dot.warn{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 18%,transparent)}
+.dot.bad{background:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 20%,transparent);animation:pulse 1.2s infinite}
+.dot.info{background:var(--info);box-shadow:0 0 0 3px color-mix(in srgb,var(--info) 18%,transparent);animation:pulse 1.6s infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 6px transparent}}
+
+/* stat cards */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0 18px}
+.stat{background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:12px 14px 10px;position:relative;overflow:hidden}
+.stat::before{content:"";position:absolute;inset:0 auto auto 0;width:100%;height:2px;background:linear-gradient(90deg,var(--tint,var(--acc)),transparent 70%)}
+.stat .l{color:var(--mut);font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;display:flex;align-items:center;gap:6px}
+.stat .n{font-size:26px;font-weight:590;letter-spacing:-1px;margin-top:4px}
+.stat .d{font-size:11px;color:var(--mut);margin-top:2px}
+.stat.s-ok{--tint:var(--ok)} .stat.s-ok .n{color:var(--ok)}
+.stat.s-warn{--tint:var(--warn)} .stat.s-warn .n{color:var(--warn)}
+.stat.s-bad{--tint:var(--bad)} .stat.s-bad .n{color:var(--bad)}
+.stat svg{position:absolute;right:10px;bottom:8px;opacity:.55}
+
+/* sections & tables */
+.sec{margin-bottom:16px}
+.sec-h{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+.sec-h .t{font-size:11px;font-weight:590;text-transform:uppercase;letter-spacing:.1em;color:var(--mut)}
+.sec-h .rule{flex:1;height:1px;background:var(--hair)}
+table{width:100%;border-collapse:separate;border-spacing:0;background:var(--card);border:1px solid var(--hair);border-radius:10px;overflow:hidden}
+th{text-align:left;font-size:10px;font-weight:590;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);padding:8px 9px;background:color-mix(in srgb,var(--fg) 3%,transparent);border-bottom:1px solid var(--hair);white-space:nowrap}
+td{padding:9px 9px;border-bottom:1px solid var(--hair);font-size:12.5px;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:color-mix(in srgb,var(--fg) 4%,transparent)}
+.dev{display:flex;align-items:center;gap:8px;font-weight:510}
+.dev a{color:inherit;text-decoration:none}
+.sub2{color:var(--mut);font-size:11px}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:510;border:1px solid var(--bdr)}
+.pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 35%,transparent);background:color-mix(in srgb,var(--ok) 8%,transparent)}
+.pill.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent);background:color-mix(in srgb,var(--warn) 8%,transparent)}
+.pill.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent)}
+.pill.info{color:var(--info);border-color:color-mix(in srgb,var(--info) 35%,transparent);background:color-mix(in srgb,var(--info) 8%,transparent)}
+.btn{border:1px solid var(--bdr);background:color-mix(in srgb,var(--fg) 4%,transparent);color:var(--fg);border-radius:6px;padding:4px 11px;font-size:12px;font-weight:510;cursor:pointer;transition:all .15s}
+.btn:hover{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn:disabled{opacity:.35;cursor:default}
+.btn:disabled:hover{background:color-mix(in srgb,var(--fg) 4%,transparent);color:var(--fg)}
+
+/* downed toggle */
 .sw{width:34px;height:18px;border-radius:999px;background:color-mix(in srgb,var(--fg) 10%,transparent);border:1px solid var(--bdr);position:relative;cursor:pointer;transition:background .18s,border-color .18s;display:inline-block;vertical-align:middle}
 .sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--mut);transition:left .18s,background .18s}
 .sw[aria-checked="true"]{background:color-mix(in srgb,var(--mut) 45%,transparent);border-color:color-mix(in srgb,var(--fg) 45%,transparent)}
 .sw[aria-checked="true"]::after{left:18px;background:var(--fg)}
+.pill.dn{color:var(--mut);border-style:dashed;border-color:color-mix(in srgb,var(--fg) 35%,transparent);background:color-mix(in srgb,var(--fg) 5%,transparent)}
+.pill[hidden]{display:none}
 tr.downed td{opacity:.55}
 tr.downed td:last-child,tr.downed td.swcell{opacity:1}
-.alerts{margin-top:22px}
-.alert{font-size:12.5px;color:var(--mut);padding:6px 0;border-bottom:1px dashed var(--bdr)}
-.alert b{font-weight:600}.alert.crit b{color:var(--crit)}.alert.info b{color:var(--ok)}
-.foot{margin-top:18px;color:var(--mut);font-size:12px}
-th{white-space:nowrap}
-.chip{display:inline-block;font-size:11.5px;padding:1px 7px;margin:1px 3px 1px 0;border:1px solid var(--bdr);border-radius:9px;white-space:nowrap;max-width:170px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
-.chip.up{color:var(--accent)} .chip.rb,.chip.un{color:var(--crit)} .chip.mi,.chip.ung{color:var(--mut)} .chip.ok{color:var(--ok)}
-.chip.act{cursor:pointer;border-style:dashed} .chip.act:hover{border-color:var(--acc);color:var(--acc)}
-.jobline{font-size:11px;color:var(--mut);margin-top:2px;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .jobline.succeeded{color:var(--ok)} .jobline.failed{color:var(--crit)} .jobline.running{color:var(--accent)}
-#jobstat{font-size:12px;min-height:16px;margin:6px 0}
-.dup{color:var(--warn);font-size:11.5px}
+tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
+
+/* heartbeat meter */
+.hb{width:54px;height:4px;border-radius:999px;background:var(--hair);overflow:hidden}
+.hb i{display:block;height:100%;border-radius:999px}
+
+/* compliance chips + job lines */
+.cchip{display:inline-block;font-size:11px;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid var(--hair);border-radius:999px;white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;background:color-mix(in srgb,var(--fg) 3%,transparent)}
+.cchip.up{color:var(--info)} .cchip.rb,.cchip.un{color:var(--bad)} .cchip.mi,.cchip.ung{color:var(--mut)} .cchip.ok{color:var(--ok)}
+.cchip.act{cursor:pointer;border-style:dashed} .cchip.act:hover{border-color:var(--acc);color:var(--acc)}
+.jobline{font-size:11px;color:var(--mut);margin-top:3px;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jobline.succeeded{color:var(--ok)} .jobline.failed{color:var(--bad)} .jobline.running{color:var(--info)}
+#jobstat{font-size:12px;min-height:16px;margin:6px 2px}
+
+/* alert feed timeline */
+.feed{background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:6px 16px 10px 18px;list-style:none;margin:0}
+.feed li{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--hair)}
+.feed li:last-child{border-bottom:none}
+.feed .t{color:var(--mut);font-size:11px;width:58px;flex:none}
+.feed .msg{font-size:12.5px}
+.feed .msg b{font-weight:590}
+.foot{display:flex;gap:10px;align-items:center;margin-top:14px;color:var(--mut);font-size:11.5px}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>E-Sports Dashboard</h1>
-  <div class="sub">esportsutil.exe — role: server — <span id="clock">…</span></div>
-
-  <div class="cards">
-    <div class="card"><div class="k">Agents reporting</div><div class="v" id="c-agents">–</div></div>
-    <div class="card"><div class="k">Manifest version</div><div class="v" id="c-manifest">–</div></div>
-    <div class="card"><div class="k">Factory entries</div><div class="v" id="c-factory">–</div></div>
-    <div class="card"><div class="k">Alerts (last 50)</div><div class="v" id="c-alerts">–</div></div>
+<div class="esu">
+  <div class="head">
+    <span class="logo">E</span>
+    <h1>E-Sports Dashboard</h1>
+    <span class="chip">manifest <b id="c-manifest">–</b></span>
+    <span class="chip mono">factory <b id="c-factory">–</b> entries</span>
+    <span class="live"><span class="dot ok" id="c-live-dot"></span> <span id="c-live">server online</span> · <span id="clock">…</span></span>
   </div>
 
-  <table>
-    <thead><tr>
-      <th>Device</th><th>PIN</th><th>Model</th><th>Games</th><th>Compliance</th><th>Check-in</th>
-      <th>State</th><th>Downed</th><th>Actions</th>
-    </tr></thead>
-    <tbody id="rows"><tr><td colspan="9" style="color:var(--mut)">connecting to server…</td></tr></tbody>
-  </table>
+  <div class="stats">
+    <div class="stat s-ok">
+      <div class="l"><span class="dot ok"></span>clients online</div>
+      <div class="n" id="c-agents">–</div>
+      <div class="d" id="c-agents-d">of – registered</div>
+      <svg width="56" height="18" viewBox="0 0 56 18"><polyline points="0,14 8,12 16,13 24,9 32,10 40,6 48,7 56,4" fill="none" stroke="#10b981" stroke-width="1.5"/></svg>
+    </div>
+    <div class="stat s-warn">
+      <div class="l"><span class="dot warn"></span>out-of-sync games</div>
+      <div class="n" id="c-issues">–</div>
+      <div class="d" id="c-issues-d">compliance findings</div>
+      <svg width="56" height="18" viewBox="0 0 56 18"><polyline points="0,10 8,9 16,12 24,8 32,10 40,7 48,9 56,6" fill="none" stroke="#d97706" stroke-width="1.5"/></svg>
+    </div>
+    <div class="stat s-bad">
+      <div class="l"><span class="dot bad"></span>agent down</div>
+      <div class="n" id="c-down">–</div>
+      <div class="d" id="c-down-d">heartbeat timeout exceeded</div>
+      <svg width="56" height="18" viewBox="0 0 56 18"><polyline points="0,6 8,7 16,6 24,8 32,7 40,12 48,16 56,16" fill="none" stroke="#ef4444" stroke-width="1.5"/></svg>
+    </div>
+    <div class="stat">
+      <div class="l"><span class="dot info"></span>pending pairing</div>
+      <div class="n" id="c-pending">–</div>
+      <div class="d" id="c-pending-d">awaiting operator</div>
+      <svg width="56" height="18" viewBox="0 0 56 18"><polyline points="0,12 8,11 16,12 24,10 32,11 40,9 48,10 56,9" fill="none" stroke="#38bdf8" stroke-width="1.5"/></svg>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-h"><span class="t">Device Fleet</span><span class="rule"></span><span class="chip mono">PIN system</span></div>
+    <table>
+      <thead><tr>
+        <th>Device</th><th>PIN</th><th>Heartbeat</th><th>Games</th><th>Compliance</th>
+        <th>State</th><th>Downed</th><th></th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="8" style="color:var(--mut)">connecting to server…</td></tr></tbody>
+    </table>
+  </div>
 
   <div id="jobstat"></div>
-  <div class="alerts"><div class="k" style="color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Recent alerts</div><div id="alerts"></div></div>
-  <div class="foot">rename, downed and locate act live against the device registry — downed applies on the agent's next heartbeat ack; locate is a one-shot directive with TTL.</div>
+
+  <div class="sec">
+    <div class="sec-h"><span class="t">Alert Feed</span><span class="rule"></span><span class="chip mono">→ windows toast</span></div>
+    <ul class="feed" id="alerts"><li><span class="t mono">—</span><span class="msg" style="color:var(--mut)">none yet</span></li></ul>
+  </div>
+
+  <div class="foot"><span class="dot info" style="width:6px;height:6px"></span>
+    rename, downed and locate act live against the device registry — downed applies on the agent's next heartbeat ack; locate is a one-shot directive with TTL.
+  </div>
 </div>
 <script>
 async function api(path, body){
@@ -97,60 +190,78 @@ async function fixJob(cid, kind, subjEnc){
   const el = document.getElementById('jobstat');
   el.textContent = r.ok ? `job queued: ${kind} · ${subject} (${(r.job_id||'').slice(0,8)}) — agent picks it up on next heartbeat`
                        : `job rejected: ${r.error || 'server error'}`;
-  el.style.color = r.ok ? 'var(--ok)' : 'var(--crit)';
+  el.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
   refresh();
 }
 
-function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function esc(s){ return String(s ?? '').replace(/[&<>\"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c])); }
 
 async function refresh(){
   let d;
   try { d = await (await fetch('/api/state')).json(); }
-  catch { document.getElementById('rows').innerHTML = '<tr><td colspan="9" style="color:var(--crit)">server unreachable</td></tr>'; return; }
+  catch { document.getElementById('rows').innerHTML = '<tr><td colspan="8" style="color:var(--bad)">server unreachable</td></tr>'; return; }
   document.getElementById('clock').textContent = new Date(d.server_time).toLocaleTimeString();
-  document.getElementById('c-agents').textContent = d.agents_reporting + ' / ' + d.agents_total;
+  document.getElementById('c-agents').textContent = d.agents_reporting;
+  document.getElementById('c-agents-d').textContent = `of ${d.agents_total} registered`;
+  const ld = document.getElementById('c-live-dot');
+  ld.className = 'dot ' + (d.agents_reporting > 0 ? 'ok' : 'bad');
+  document.getElementById('c-live').textContent = `${d.agents_reporting}/${d.agents_total} agents reporting`;
   document.getElementById('c-manifest').textContent = d.manifest_version;
   document.getElementById('c-factory').textContent = d.factory_entries;
-  document.getElementById('c-alerts').textContent = d.alerts.length;
+
+  const fixable = d.devices.reduce((n, x) => n + ((x.issues||[]).filter(i => FIXABLE[i.kind]).length), 0);
+  const fixPcs = d.devices.filter(x => (x.issues||[]).some(i => FIXABLE[i.kind])).length;
+  document.getElementById('c-issues').textContent = fixable;
+  document.getElementById('c-issues-d').textContent = fixPcs ? `${fixPcs} PC(s) · chips queue fixes` : 'all games in sync';
+  const down = d.devices.filter(x => !x.online);
+  document.getElementById('c-down').textContent = down.length;
+  document.getElementById('c-down-d').textContent = down.length ? down.map(x => x.display_name || 'PIN ' + x.device_pin).slice(0, 2).join(', ') : 'all agents reporting';
+  const pend = d.devices.filter(x => x.pending);
+  document.getElementById('c-pending').textContent = pend.length;
+  document.getElementById('c-pending-d').textContent = pend.length ? `${(pend[0].display_name||'?')} · PIN ${pend[0].device_pin} awaiting` : 'none';
 
   document.getElementById('rows').innerHTML = d.devices.map(dev => {
-    const dot = dev.online ? 'on' : 'off';
-    const ago = dev.last_heartbeat_sec_ago === null ? 'never' : Math.round(dev.last_heartbeat_sec_ago) + 's ago';
+    const issues = dev.issues || [];
+    const dotCls = !dev.online ? 'bad' : dev.pending ? 'info' : issues.length ? 'warn' : 'ok';
+    const ago = dev.last_heartbeat_sec_ago === null ? null : Math.round(dev.last_heartbeat_sec_ago);
+    const agoTxt = ago === null ? 'never' : ago < 120 ? ago + 's' : Math.round(ago / 60) + 'm';
+    const hbW = ago === null ? 4 : Math.max(6, Math.round(100 * (1 - ago / 120)));
+    const hbC = !dev.online ? 'var(--bad)' : ago > 60 ? 'var(--warn)' : 'var(--ok)';
     const dn = dev.desired_state === 'downed';
-    const dupNote = dev.duplicates ? `<div class="dup">${dev.duplicates} duplicate game id(s) awaiting server resolution</div>` : '';
+    const dupNote = dev.duplicates ? `<div class="sub2">${dev.duplicates} duplicate game id(s) awaiting server resolution</div>` : '';
     const kindCls = {update_required:'up', rollback_required:'rb', missing_from_machine:'mi', unmanaged_game:'ung', unapproved_app:'un', duplicate_resolved:'up'};
     const kindLbl = {update_required:'↑', rollback_required:'↓', missing_from_machine:'＋', unmanaged_game:'?', unapproved_app:'⚠', duplicate_resolved:'dup'};
-    const issues = dev.issues || [];
     const chips = issues.length
       ? issues.map(i => {
           const fix = FIXABLE[i.kind] && !(i.kind === 'unapproved_app' && i.protected);
-          return `<span class="chip ${kindCls[i.kind]||'ung'}${fix?' act':''}"${fix?` onclick="fixJob('${dev.client_id}','${FIXABLE[i.kind]}','${encodeURIComponent(i.subject)}')"`:''} title="${esc(i.kind)}: ${esc(i.subject)}${i.reported_version?` (now ${i.reported_version}, want ${i.wanted_version})`:i.wanted_version?` (want ${i.wanted_version})`:''}${i.keep_path?` — keep ${i.keep_path}`:''}${i.protected?' [protected]':''}${fix?' — click to enqueue fix job':''}">${kindLbl[i.kind]||i.kind}${i.kind==='unapproved_app'&&i.protected?'🔒':''} ${esc(i.subject)}</span>`;
+          return `<span class="cchip ${kindCls[i.kind]||'ung'}${fix?' act':''}"${fix?` onclick="fixJob('${dev.client_id}','${FIXABLE[i.kind]}','${encodeURIComponent(i.subject)}')"`:` title="${esc(i.kind)}: ${esc(i.subject)}"`}>${kindLbl[i.kind]||i.kind} ${esc(i.subject)}</span>`;
         }).join('')
-      : (dev.games ? '<span class="chip ok">✓</span>' : '<span style="color:var(--mut)">—</span>');
+      : (dev.games ? '<span class="cchip ok">✓ in sync</span>' : '<span style="color:var(--mut)">—</span>');
     const jobs = (dev.jobs || []).slice(0,3).map(j =>
       `<div class="jobline ${j.state}" title="${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}">${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}</div>`).join('');
     return `<tr class="${dn?'downed':''}">
-      <td><a href="#" style="color:inherit;text-decoration:none" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`});return false">${esc(dev.display_name)}${dev.pending?' <span class="pin">(awaiting name)</span>':''}</a>${dupNote}</td>
-      <td class="pin">${esc(dev.device_pin)}</td>
-      <td>${esc(dev.machine_model ?? '—')}</td>
-      <td>${dev.games ?? '—'}</td>
-      <td>${chips}${jobs}</td>
-      <td>${ago}</td>
+      <td><span class="dev"><span class="dot ${dotCls}"></span><a href="#" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`});return false">${esc(dev.display_name)}${dev.pending?' <span class="sub2">(awaiting name)</span>':''}</a></span>
+        ${dev.machine_model?`<div class="sub2" style="margin-left:16px">${esc(dev.machine_model)}</div>`:''}${dupNote}</td>
+      <td><span class="pill ${dev.online?'ok':'bad'} mono">${esc(dev.device_pin)}</span></td>
+      <td><div class="hb"><i style="width:${hbW}%;background:${hbC}"></i></div><div class="sub2 mono" style="margin-top:3px">${agoTxt}</div></td>
+      <td class="mono">${dev.games ?? '—'}</td>
+      <td style="max-width:340px">${chips}${jobs}</td>
       <td>
         <span class="pill ${dn?'':'ok'}" ${dn?'hidden':''}>active</span>
         <span class="pill dn" ${dn?'':'hidden'}>${dev.online?'downed':'downed · queued'}</span>
       </td>
-      <td class="swcell"><span class="sw" role="switch" aria-checked="${dn}" title="toggle downed state (swaps out-of-service wallpaper on the PC)" onclick="toggleDown('${dev.client_id}', !${dn})"></span></td>
+      <td class="swcell"><span class="sw" role="switch" aria-checked="${dn}" title="${dev.online?'toggle downed state (swaps out-of-service wallpaper on the PC)':'agent unreachable — downed state is stored and will be applied when it returns'}" onclick="toggleDown('${dev.client_id}', !${dn})"></span></td>
       <td>
         <button class="btn" ${dev.online?'':'disabled'} onclick="locate('${dev.client_id}')">locate</button>
         <button class="btn" onclick="printLabel('${dev.client_id}')">label</button>
       </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="9" style="color:var(--mut)">no agents registered yet — onboard a PC with its PIN</td></tr>';
+  }).join('') || '<tr><td colspan="8" style="color:var(--mut)">no agents registered yet — onboard a PC with its PIN</td></tr>';
 
+  const sevCls = {crit:'bad', warn:'warn', info:'info'};
   document.getElementById('alerts').innerHTML = d.alerts.slice(0,8).map(a =>
-    `<div class="alert ${a.severity}"><b>${esc(a.type)}</b> · ${esc(a.client_id)} · ${esc(a.message)} · ${new Date(a.timestamp).toLocaleTimeString()}</div>`
-  ).join('') || '<div class="alert">none</div>';
+    `<li><span class="t mono">${new Date(a.timestamp).toLocaleTimeString()}</span><span class="pill ${sevCls[a.severity]||'info'}">${esc(a.type)}</span><span class="msg"><b>${esc(a.client_id)}</b> — ${esc(a.message)}</span></li>`
+  ).join('') || '<li><span class="t mono">—</span><span class="msg" style="color:var(--mut)">none yet</span></li>';
 }
 refresh();
 setInterval(refresh, 3000);

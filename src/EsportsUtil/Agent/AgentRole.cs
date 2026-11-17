@@ -110,7 +110,14 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
         var id = Identity.LoadOrCreate(cfg.DataDir);
         var client = new AgentClient(http, cfg, id);
         var runner = new JobRunner(http, cfg);
-        Console.WriteLine($"esportsutil agent {AgentInfo.Version} — client_id={id.ClientId} pin={id.DevicePin}");
+        // Console banner mirrors the client_app mockup identity: big PIN, server, liveness.
+        var pinSpaced = string.Join(' ', id.DevicePin.ToCharArray());
+        Console.WriteLine("┌─ E-SPORTS DASHBOARD · CLIENT AGENT ────────────────────");
+        Console.WriteLine($"│  PIN        {pinSpaced}");
+        Console.WriteLine($"│  server     {cfg.ServerUrl}");
+        Console.WriteLine($"│  client_id  {id.ClientId}");
+        Console.WriteLine($"│  liveness   heartbeat every {cfg.HeartbeatIntervalSec}s · v{AgentInfo.Version}");
+        Console.WriteLine("└────────────────────────────────────────────────────────");
 
         var registered = false;
         var nextReport = DateTime.MinValue;

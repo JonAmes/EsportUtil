@@ -28,10 +28,12 @@ public static class LocateOverlayWindow
 
     private sealed class OverlayForm : System.Windows.Forms.Form
     {
-        private static readonly Color Base = Color.FromArgb(12, 14, 20);      // near-black stage
-        private static readonly Color Accent = Color.FromArgb(0, 200, 255);   // venue accent
+        private static readonly Color Base = Color.FromArgb(13, 15, 20);      // mockup #0d0f14 stage
+        private static readonly Color Accent = Color.FromArgb(109, 141, 255); // mockup #6d8dff
+        private static readonly Color Fg = Color.FromArgb(230, 230, 234);     // mockup --fg
+        private static readonly Color Muted = Color.FromArgb(155, 155, 166);  // mockup --mut
         private readonly LocateOverlayRequest _req;
-        private readonly System.Windows.Forms.Timer _timer = new() { Interval = 500 };
+        private readonly System.Windows.Forms.Timer _timer = new() { Interval = 575 };  // ~1.15s pulse cycle
         private bool _pulse;
 
         public OverlayForm(LocateOverlayRequest req)
@@ -44,7 +46,7 @@ public static class LocateOverlayWindow
             TopMost = true;
             ShowInTaskbar = false;
             BackColor = Base;
-            ForeColor = Color.White;
+            ForeColor = Fg;
             DoubleBuffered = true;
             KeyPreview = true;
             KeyDown += (_, e) => { if (e.KeyCode == System.Windows.Forms.Keys.Escape) Close(); };
@@ -132,54 +134,139 @@ public static class LocateOverlayWindow
         protected override void OnPaint(System.Windows.Forms.PaintEventArgs e)
         {
             var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             var w = ClientSize.Width;
             var h = ClientSize.Height;
 
-            // pulsing accent border
-            using (var pen = new Pen(_pulse ? Accent : Color.FromArgb(70, 70, 90), 10))
-                g.DrawRectangle(pen, 5, 5, w - 11, h - 11);
+            // Stage: near-black with the mockup's faint corner glows (wallpaper hint under the dim layer).
+            g.Clear(Base);
+            DrawGlow(g, new Rectangle(-w / 4, -h / 4, w, h), Color.FromArgb(60, 22, 35, 61));
+            DrawGlow(g, new Rectangle(w / 2, h / 2, w, h), Color.FromArgb(45, 27, 20, 48));
 
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var name = _req.DisplayName.ToUpperInvariant();
-            var meta = _req.MetaLine();
-            var payload = _req.QrPayload();
-            var qr = Qr.Modules(payload);
-            var L = OverlayLayout.Compute(w, h, qr.Length, name, meta, payload);
+            var qr = Qr.Modules(_req.QrPayload());
+            var L = OverlayLayout.Compute(w, h, qr.Length, name, _req.MetaLine());
 
-            DrawCentered(g, "LOCATE", L.LabelSize, FontStyle.Bold, Accent, L.LabelY);
-            DrawCentered(g, name, L.NameSize, FontStyle.Bold, Color.White, L.NameY);
-            DrawCentered(g, meta, L.MetaSize, FontStyle.Regular, Color.FromArgb(190, 200, 210), L.MetaY);
+            // Pulsing accent border (mockup: 4px, 14px inset, rounded, glow at peak).
+            var border = RoundRect(L.BorderInset, L.BorderInset, w - 2 * L.BorderInset, h - 2 * L.BorderInset, 14 * L.Scale);
+            using (var glowPen = new Pen(Color.FromArgb(_pulse ? 60 : 20, Accent), L.BorderWidth * 3f))
+                g.DrawPath(glowPen, border);
+            using (var pen = new Pen(Color.FromArgb(_pulse ? 255 : 110, Accent), L.BorderWidth))
+                g.DrawPath(pen, border);
+            border.Dispose();
 
-            // scannable QR (white pad + black modules on the dark stage), px-per-module from the layout
-            int px = L.QrPx, modules = qr.Length;
-            int qrSize = modules * px;
-            var pad = 3 * px;
-            var box = new Rectangle(w / 2 - qrSize / 2 - pad, (int)L.QrY, qrSize + 2 * pad, qrSize + 2 * pad);
-            g.FillRectangle(Brushes.White, box);
-            using var brush = new SolidBrush(Color.Black);
-            for (int y = 0; y < modules; y++)
-                for (int x = 0; x < modules; x++)
+            // Id block — kicker (letter-spaced accent), giant name, strong-run meta.
+            var idBudget = Math.Max(100, L.QrX - L.IdLeft - L.Gap * 0.5f);
+            DrawText(g, Spaced("LOCATE — THIS MACHINE"), L.KickerSize, FontStyle.Bold, Accent, L.IdLeft, L.KickerY, idBudget);
+            DrawText(g, name, L.NameSize, FontStyle.Bold, Fg, L.IdLeft, L.NameY, idBudget);
+            DrawRuns(g, _req.MetaRuns(), L.MetaSize, Muted, Fg, L.IdLeft, L.MetaY, idBudget);
+
+            // White rounded QR card with black modules + hanging caption (identical payload to the label).
+            int card = L.QrCardPx;
+            using (var cardPath = RoundRect(L.QrX, L.QrY, card, card, 10 * L.Scale))
+                g.FillPath(Brushes.White, cardPath);
+            int px = Math.Max(1, (card - 2 * L.QrPad) / L.QrModules);
+            int codeSize = px * L.QrModules;
+            int ox = (int)L.QrX + (card - codeSize) / 2, oy = (int)L.QrY + (card - codeSize) / 2;
+            using var dark = new SolidBrush(Color.FromArgb(17, 17, 17));
+            for (int y = 0; y < L.QrModules; y++)
+                for (int x = 0; x < L.QrModules; x++)
                     if (qr[y][x])
-                        g.FillRectangle(brush, box.X + pad + x * px, box.Y + pad + y * px, px, px);
+                        g.FillRectangle(dark, ox + x * px, oy + y * px, px, px);
+            DrawCentered(g, "scan = device identity (same payload as label)", L.QrLabelSize, FontStyle.Regular, Muted, L.QrLabelY, (int)L.QrX + card / 2);
 
-            DrawCentered(g, payload, L.PayloadSize, FontStyle.Regular, Color.FromArgb(150, 160, 170), L.PayloadY);
-
-            // live auto-dismiss countdown
-            DrawCentered(g, $"auto-dismiss in {_req.SecondsLeft(now)} s — click or press ESC to close",
-                L.CountdownSize, FontStyle.Bold, Accent, L.CountdownY);
+            // Countdown top-right (mockup), dismiss hint bottom-center.
+            var cf = new Font("Segoe UI", L.CountSize, FontStyle.Bold, GraphicsUnit.Pixel);
+            var sec = $"{_req.SecondsLeft(now)}s";
+            var secSz = g.MeasureString(sec, cf);
+            g.DrawString(sec, cf, new SolidBrush(Accent), w - 36 * L.Scale - secSz.Width, 28 * L.Scale);
+            cf.Dispose();
+            DrawRight(g, "auto-dismiss", Math.Max(10, L.CountSize * 0.55f), FontStyle.Regular, Muted, w - 36 * L.Scale, 28 * L.Scale + secSz.Height);
+            DrawCentered(g, "click anywhere or press ESC to dismiss", L.HintSize, FontStyle.Regular, Muted, L.HintY, w / 2);
         }
 
-        private void DrawCentered(System.Drawing.Graphics g, string text, float size, FontStyle style, Color color, float y)
+        private static string Spaced(string s)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var c in s) { if (sb.Length > 0) sb.Append(' '); sb.Append(c); }
+            return sb.ToString();
+        }
+
+        private static System.Drawing.Drawing2D.GraphicsPath RoundRect(float x, float y, float w, float h, float r)
+        {
+            r = Math.Min(r, Math.Min(w, h) / 2);
+            var p = new System.Drawing.Drawing2D.GraphicsPath();
+            p.AddArc(x, y, r * 2, r * 2, 180, 90);
+            p.AddArc(x + w - r * 2, y, r * 2, r * 2, 270, 90);
+            p.AddArc(x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, 90);
+            p.AddArc(x, y + h - r * 2, r * 2, r * 2, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
+
+        private static void DrawGlow(System.Drawing.Graphics g, Rectangle r, Color center)
+        {
+            using var path = new System.Drawing.Drawing2D.GraphicsPath();
+            path.AddEllipse(r);
+            using var pgb = new System.Drawing.Drawing2D.PathGradientBrush(path)
+            {
+                CenterColor = center,
+                SurroundColors = [Color.FromArgb(0, center.R, center.G, center.B)],
+            };
+            g.FillEllipse(pgb, r);
+        }
+
+        /// <summary>Left-aligned at (x, y); measured-fit shrinks the font (never the position) so long text can't clip.</summary>
+        private void DrawText(System.Drawing.Graphics g, string text, float size, FontStyle style, Color color, float x, float y, float maxWidth)
         {
             var f = new Font("Segoe UI", size, style, GraphicsUnit.Pixel);
             var sz = g.MeasureString(text, f);
-            while (sz.Width > ClientSize.Width * 0.94f && f.Size > 10)   // measured fit, not just estimated
+            while (sz.Width > maxWidth && f.Size > 10)
             {
                 var smaller = new Font(f.FontFamily, f.Size * 0.9f, f.Style, GraphicsUnit.Pixel);
                 f.Dispose(); f = smaller; sz = g.MeasureString(text, f);
             }
             using (f)
-                g.DrawString(text, f, new SolidBrush(color), (ClientSize.Width - sz.Width) / 2, y);
+                g.DrawString(text, f, new SolidBrush(color), x, y);
+        }
+
+        /// <summary>Consecutive runs on one baseline; strong runs get SemiBold + full color (mockup meta line).</summary>
+        private void DrawRuns(System.Drawing.Graphics g, List<(string Text, bool Strong)> runs, float size, Color muted, Color strong, float x, float y, float maxWidth)
+        {
+            float total;
+            do
+            {
+                total = 0;
+                foreach (var (t, st) in runs)
+                    using (var f = new Font("Segoe UI", size, st ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
+                        total += g.MeasureString(t, f).Width;
+                if (total <= maxWidth || size <= 9) break;
+                size *= 0.9f;
+            } while (true);
+            float cx = x;
+            foreach (var (t, st) in runs)
+            {
+                var f = new Font("Segoe UI", size, st ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel);
+                var sz = g.MeasureString(t, f);
+                g.DrawString(t, f, new SolidBrush(st ? strong : muted), cx, y);
+                cx += sz.Width;
+                f.Dispose();
+            }
+        }
+
+        private void DrawRight(System.Drawing.Graphics g, string text, float size, FontStyle style, Color color, float rightX, float y)
+        {
+            using var f = new Font("Segoe UI", size, style, GraphicsUnit.Pixel);
+            var sz = g.MeasureString(text, f);
+            g.DrawString(text, f, new SolidBrush(color), rightX - sz.Width, y);
+        }
+
+        private void DrawCentered(System.Drawing.Graphics g, string text, float size, FontStyle style, Color color, float y, int centerX)
+        {
+            using var f = new Font("Segoe UI", size, style, GraphicsUnit.Pixel);
+            var sz = g.MeasureString(text, f);
+            g.DrawString(text, f, new SolidBrush(color), centerX - sz.Width / 2, y);
         }
     }
 }
