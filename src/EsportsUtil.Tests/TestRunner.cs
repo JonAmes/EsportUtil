@@ -100,6 +100,9 @@ using var cts = new CancellationTokenSource();
 var loop = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(5) }, agCfg);
 var overlayReqs = new List<LocateOverlayRequest>();          // probe instead of spawning real overlay children
 loop.OverlaySurface = r => overlayReqs.Add(r);
+var downReqs = new List<DownedOverlayRequest>();             // sticky downed overlay probe (T21)
+var downHandles = new List<DownProbe>();
+loop.DownOverlaySurface = r => { downReqs.Add(r); var h = new DownProbe(); downHandles.Add(h); return h; };
 var loopTask = loop.RunAsync(cts.Token);
 
 Check(await Until(async () => (await State()).devices.Any(d => d.games >= 2 && d.duplicates == 1)),
@@ -210,6 +213,38 @@ Check(loop.ReportsSent <= 2, "T8f content-hash dedupe: no re-upload of unchanged
     Check((int)jr.StatusCode == 200, "T20h deploy_content job accepted for the loop device");
     Check(await Until(async () => (await View()).RecentJobs.Any(j => j.Kind == "deploy_content" && j.State is "succeeded" or "failed"), 20),
         "T20i executed job surfaces in the client view Jobs section with final state");
+
+    // ---------- T21: sticky downed overlay — no expiry, staff bypass, episode lifecycle ----------
+    var t21Base = downReqs.Count;                                    // earlier T8/T20 drills already left episodes
+    await PostAck("/api/downed", new DownedRequest(cid, "downed", null, "GPU riser fan loud"));
+    Check(await Until(() => Task.FromResult(downReqs.Count == t21Base + 1
+              && downReqs[^1].Reason == "GPU riser fan loud"), 6),
+        "T21a downed toggle surfaces a sticky downed overlay carrying the operator note");
+    Check(downReqs[^1].ShouldShow(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 315_360_000L),
+        "T21b overlay has no expiration — still shows ten years out");
+    Check(downReqs[^1].AccentHex == "#d97706" && !downReqs[^1].HasCountdown,
+        "T21c sticky variant keeps the dashboard downed amber (#d97706) and carries no countdown");
+    Check(await Until(async () => (await View()).DownedReason == "GPU riser fan loud", 6),
+        "T21d operator downed note streams into the client view via heartbeat ack");
+    var h = downHandles[^1];
+    await Task.Delay(3000);                                          // ~3 heartbeat beats
+    Check(downReqs.Count == t21Base + 1 && h.Alive,
+        "T21e overlay stands across heartbeats — no respawn, no auto-dismiss");
+    h.AliveFlag = false;                                             // staff presses BYPASS on the machine
+    await Task.Delay(2500);
+    Check(downReqs.Count == t21Base + 1,
+        "T21f staff bypass is honored — no re-show for the rest of the downed episode");
+    await PostAck("/api/downed", new DownedRequest(cid, "active", null, null));
+    Check(await Until(() => Task.FromResult(loop.LastDesiredState == "active"), 6),
+        "T21g-pre agent observes the active flip (episode resets)");
+    await PostAck("/api/downed", new DownedRequest(cid, "downed", null, "re-flagged after repair"));
+    Check(await Until(() => Task.FromResult(downReqs.Count == t21Base + 2
+              && downReqs[^1].Reason == "re-flagged after repair"), 6),
+        "T21g active→downed flip starts a new episode — overlay shows again");
+    await PostAck("/api/downed", new DownedRequest(cid, "active", null, null));
+    Check(await Until(() => Task.FromResult(downHandles[^1].WasKilled), 6),
+        "T21h operator clear kills the live overlay child");
+
     dash.Stop();
 }
 
@@ -583,6 +618,16 @@ static bool Throws<T>(Action a) where T : Exception
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
 file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null);
+
+/// <summary>Fake sticky-overlay child for T21: Alive flips when staff "bypasses" on the machine;
+/// WasKilled records the operator-driven clear. The agent loop supervises this handle each ack.</summary>
+file sealed class DownProbe : EsportsUtil.Agent.IDownOverlayHandle
+{
+    public bool AliveFlag = true;
+    public bool WasKilled;
+    public bool Alive => AliveFlag;
+    public void Kill() { if (AliveFlag) { AliveFlag = false; WasKilled = true; } }
+}
 file sealed record IssueDoc(string kind, string subject, string? keep_path, bool? @protected);
 file sealed record JobDoc(string job_id, string kind, string subject, string state, string? detail);
 file sealed record AlertDoc(string type, string severity);

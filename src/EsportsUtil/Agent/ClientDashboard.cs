@@ -17,6 +17,7 @@ public sealed record LocalStatus(
     bool Registered,
     string? DisplayName,                 // operator pairing name; null = still pending
     string DesiredState,
+    string? DownedReason,
     DateTimeOffset? LastAckAt,
     bool LastAckOk,
     string? LastAckError,
@@ -119,7 +120,7 @@ public sealed class ClientDashboard
             AgentInfo.Version,
             loop.CurrentIdentity?.ClientId, loop.CurrentIdentity?.DevicePin,
             cfg.ServerUrl, cfg.HeartbeatIntervalSec,
-            loop.IsRegistered, loop.PairedDisplayName, loop.LastDesiredState,
+            loop.IsRegistered, loop.PairedDisplayName, loop.LastDesiredState, loop.LastDownedReason,
             loop.LastAckAt, loop.LastAckOk, loop.LastAckError,
             loop.LastReportAt, loop.ReportsSent, loop.LastReportHash,
             rep?.MachineState?["machineModel"]?.GetValue<string>(),

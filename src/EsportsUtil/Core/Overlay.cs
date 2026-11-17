@@ -3,13 +3,35 @@ using QRCoder;
 
 namespace EsportsUtil.Core;
 
+/// <summary>What an overlay surface (WinForms or console) needs to render, independent of which
+/// request triggered it. The locate overlay and the sticky downed overlay share one renderer/style
+/// and differ only through this view: kicker text, dismiss hint, countdown vs no-expiry, accent color.</summary>
+public interface IOverlayView
+{
+    string DisplayName { get; }
+    string Kicker { get; }                 // letter-spaced accent heading
+    string DismissHint { get; }            // bottom-center note
+    bool HasCountdown { get; }             // false = no expiry (downed): show a BYPASS chip instead
+    string AccentHex { get; }              // same style, each state keeps its own palette token
+    string MetaLine();
+    List<(string Text, bool Strong)> MetaRuns();
+    string QrPayload();
+    bool ShouldShow(long nowUnix);
+    int SecondsLeft(long nowUnix);
+}
+
 /// <summary>Locate overlay — pure request model shared by the agent (which spawns the overlay surface),
 /// the Windows WinForms renderer, and the dev console renderer. The server stamps the display_name into
 /// the directive payload; the agent supplies pin/client_id from its identity. Expiry is honored at every
 /// hop, so a late ack can never pop a stale overlay.</summary>
-public sealed record LocateOverlayRequest(string DisplayName, string DevicePin, string ClientId, long ExpiresUnix, string? Model)
+public sealed record LocateOverlayRequest(string DisplayName, string DevicePin, string ClientId, long ExpiresUnix, string? Model) : IOverlayView
 {
     public const string Flag = "--overlay";
+
+    public string Kicker => "LOCATE — THIS MACHINE";
+    public string DismissHint => "click anywhere or press ESC to dismiss";
+    public bool HasCountdown => true;
+    public string AccentHex => "#6d8dff";   // brand accent (mockup #6d8dff)
 
     /// <summary>Build the child-process argv (after the executable) for the same-EXE overlay mode.</summary>
     public static List<string> BuildArgs(LocateOverlayRequest req) =>
@@ -64,6 +86,76 @@ public sealed record LocateOverlayRequest(string DisplayName, string DevicePin, 
     }
 
     /// <summary>QR payload identical to the printed label — one scan protocol covers both surfaces.</summary>
+    public string QrPayload() => FileLabelPrinter.QrPayload(ClientId, DevicePin);
+}
+
+/// <summary>Sticky downed overlay — same renderer and style as the locate overlay, no expiration:
+/// it stands while desired_state == downed and is dismissed only by an explicit staff bypass on the
+/// machine (the agent never re-shows it within the same downed episode) or by the operator flipping
+/// the machine back to active (the agent kills the child). Accent keeps the downed palette token
+/// (#d97706 — the same amber the dashboards use for out-of-service), everything else is unchanged.</summary>
+public sealed record DownedOverlayRequest(string DisplayName, string DevicePin, string ClientId, string? Model, string? Reason) : IOverlayView
+{
+    public const string Flag = "--downed-overlay";
+
+    public string Kicker => "OUT OF SERVICE — THIS MACHINE";
+    public string DismissHint => "staff bypass: press B or click BYPASS — the machine stays out of service";
+    public bool HasCountdown => false;                        // no expiry: stands until bypass or state flip
+    public string AccentHex => "#d97706";                     // dashboard downed amber (--warn)
+    public bool ShouldShow(long nowUnix) => true;
+    public int SecondsLeft(long nowUnix) => 0;
+
+    public static List<string> BuildArgs(DownedOverlayRequest req) =>
+    [
+        Flag,
+        "--display-name", req.DisplayName,
+        "--pin", req.DevicePin,
+        "--client-id", req.ClientId,
+        "--model", req.Model ?? "",
+        "--reason", req.Reason ?? "",
+    ];
+
+    public static bool TryParse(IReadOnlyList<string> a, out DownedOverlayRequest req)
+    {
+        req = null!;
+        string? name = null, pin = null, cid = null, model = null, reason = null;
+        for (int i = 0; i < a.Count; i++)
+            switch (a[i])
+            {
+                case "--display-name" when i + 1 < a.Count: name = a[++i]; break;
+                case "--pin" when i + 1 < a.Count: pin = a[++i]; break;
+                case "--client-id" when i + 1 < a.Count: cid = a[++i]; break;
+                case "--model" when i + 1 < a.Count: model = a[++i]; break;
+                case "--reason" when i + 1 < a.Count: reason = a[++i]; break;
+            }
+        if (name is null || pin is null || cid is null) return false;
+        req = new DownedOverlayRequest(name, pin, cid,
+            string.IsNullOrEmpty(model) ? null : model,
+            string.IsNullOrEmpty(reason) ? null : reason);
+        return true;
+    }
+
+    public string MetaLine()
+    {
+        var s = $"PIN {DevicePin} · {(Model is null ? "model unknown" : Model)} · client {ClientId[..Math.Min(8, ClientId.Length)]}";
+        return Reason is { Length: > 0 } r ? s + $" · note: {r}" : s;
+    }
+
+    public List<(string Text, bool Strong)> MetaRuns()
+    {
+        var runs = new List<(string, bool)> { ("PIN ", false), (DevicePin, true) };
+        runs.Add((" · ", false));
+        runs.Add((Model is null ? "model unknown" : Model, true));
+        runs.Add(($" · client {ClientId[..Math.Min(8, ClientId.Length)]}", false));
+        if (Reason is { Length: > 0 } r)
+        {
+            runs.Add((" · note: ", false));
+            runs.Add((r, true));
+        }
+        return runs;
+    }
+
+    /// <summary>QR payload identical to the printed label — staff can scan a downed station too.</summary>
     public string QrPayload() => FileLabelPrinter.QrPayload(ClientId, DevicePin);
 }
 
@@ -197,6 +289,69 @@ public static class ConsoleOverlay
             Console.Clear();
             Console.WriteLine(RenderCard(req, now));
             // Enter pressed → close early (like click/ESC on Windows)
+            if (await Task.WhenAny(dismiss, Task.Delay(1000, CancellationToken.None)) == dismiss) break;
+        }
+    }
+
+    // --- sticky downed variant (same style, no expiry; ENTER = staff bypass) ---------------------
+    public static string RenderDownCard(DownedOverlayRequest req)
+    {
+        const int inner = 52;
+        var qr = Qr.Modules(req.QrPayload());
+        string Row(string text) => $"┃{text,-inner}┃";
+        // operator notes are arbitrary length — word-wrap long lines to the frame instead of blowing it out
+        List<string> Wrap(string text)
+        {
+            var lines = new List<string>();
+            var cur = "";
+            foreach (var word in text.Split(' '))
+            {
+                if (cur.Length + word.Length + 1 > inner - 1 && cur.Length > 0) { lines.Add(cur); cur = word; }
+                else cur = cur.Length == 0 ? word : cur + " " + word;
+            }
+            if (cur.Length > 0) lines.Add(cur);
+            return lines;
+        }
+        var sb = new StringBuilder();
+        sb.Append("┏").Append(new string('━', inner)).AppendLine("┓");
+        foreach (var l in Wrap($"OUT OF SERVICE — {req.DisplayName}")) sb.AppendLine(Row(" " + l));
+        foreach (var l in Wrap(req.MetaLine())) sb.AppendLine(Row(" " + l));
+        sb.AppendLine(Row(" no expiry — ENTER to staff-bypass (stays downed)"));
+        sb.AppendLine("┣" + new string('─', inner) + "┫");
+        for (int y = 0; y + 1 < qr.Length; y += 2)
+        {
+            sb.Append("┃  ");
+            for (int x = 0; x < qr[0].Length; x++)
+            {
+                bool top = qr[y][x], bot = qr[y + 1][x];
+                sb.Append(top && bot ? '█' : top ? '▀' : bot ? '▄' : ' ');
+            }
+            sb.AppendLine();
+        }
+        sb.AppendLine("┗" + new string('─', inner) + "┛");
+        sb.AppendLine($"scan QR payload: {req.QrPayload()}");
+        return sb.ToString();
+    }
+
+    public static async Task RunDownedAsync(DownedOverlayRequest req, CancellationToken ct)
+    {
+        Console.WriteLine("press ENTER to staff-bypass");
+        // Staff bypass = an explicit ENTER on a real console. EOF/closed stdin (the agent is often
+        // a daemon with no TTY) is NOT a bypass — the no-expiry card holds until the agent kills it.
+        var dismiss = Task.Run(async () =>
+        {
+            try
+            {
+                if (Console.ReadLine() is not null) return;
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            catch (IOException) { await Task.Delay(Timeout.Infinite, ct); }
+            catch (TaskCanceledException) { }
+        }, ct);
+        while (!ct.IsCancellationRequested)
+        {
+            Console.Clear();
+            Console.WriteLine(RenderDownCard(req));
             if (await Task.WhenAny(dismiss, Task.Delay(1000, CancellationToken.None)) == dismiss) break;
         }
     }

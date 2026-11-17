@@ -170,7 +170,7 @@ async function tick(){
   const dn=s.desired_state==='downed';
   $('ststate').className='stat '+(dn?'s-warn':'s-ok');
   $('stn').textContent=(s.desired_state||'?').toUpperCase();
-  $('std').textContent=dn?'out of service · wallpaper swap':'in service';
+  $('std').textContent=dn?'out of service · '+(s.downed_reason||'wallpaper swap'):'in service';
 
   // identity card
   const row=(k,v,cls)=>`<div class="kv"><span class="k">${k}</span><span class="v ${cls||''}">${v}</span></div>`;

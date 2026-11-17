@@ -5,12 +5,13 @@ using Microsoft.AspNetCore.Builder;
 
 string? roleFlag = null;
 string? configPath = null, foundConfig = null;
-bool overlayMode = false;
+bool overlayMode = false, downedOverlayMode = false;
 var rawArgs = new List<string>(args);
 for (int i = 0; i < args.Length; i++)
     switch (args[i])
     {
         case LocateOverlayRequest.Flag: overlayMode = true; break;
+        case DownedOverlayRequest.Flag: downedOverlayMode = true; break;
         case "--role" when i + 1 < args.Length: roleFlag = args[++i]; break;
         case "--config" when i + 1 < args.Length: configPath = args[++i]; break;
     }
@@ -36,6 +37,25 @@ if (overlayMode)
     }
 #endif
     await ConsoleOverlay.RunAsync(req, CancellationToken.None);
+    return 0;
+}
+
+// Same-EXE sticky downed overlay (no expiry; staff bypass closes it, the agent kills it on clear).
+if (downedOverlayMode)
+{
+    if (!DownedOverlayRequest.TryParse(rawArgs, out var dreq))
+    {
+        Console.Error.WriteLine("usage: esportsutil --downed-overlay --display-name NAME --pin NNNN --client-id ID [--model M] [--reason R]");
+        return 2;
+    }
+#if WINDOWS
+    if (OperatingSystem.IsWindows())
+    {
+        DownedOverlayWindow.Run(dreq);
+        return 0;
+    }
+#endif
+    await ConsoleOverlay.RunDownedAsync(dreq, CancellationToken.None);
     return 0;
 }
 

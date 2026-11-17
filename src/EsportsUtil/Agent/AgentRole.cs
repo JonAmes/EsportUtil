@@ -137,6 +137,14 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
     private AgentClient? _client;
     /// <summary>Locate overlay surface. Default spawns the same-EXE overlay child; tests inject a probe.</summary>
     public Action<LocateOverlayRequest> OverlaySurface { get; set; } = req => OverlayLauncher.Launch(req);
+
+    /// <summary>Sticky downed overlay seam (Phase 5): same probe pattern as OverlaySurface so tests
+    /// can capture requests and fake the child lifetime. The overlay has no expiry — the loop
+    /// supervises it: staff bypass = child exits, operator clear = the loop kills it.</summary>
+    public Func<DownedOverlayRequest, IDownOverlayHandle?> DownOverlaySurface { get; set; } = req => DownOverlayLauncher.Launch(req);
+    public string? LastDownedReason { get; private set; }
+    private IDownOverlayHandle? _downOverlay;
+    private bool _downOverlayDismissed;
     private string? _lastHash;
     private string? _downedContentApplied;          // content_id of the downed wallpaper currently applied
     private DateTime _reportNow = DateTime.MinValue;
@@ -190,7 +198,9 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                     {
                         LastDesiredState = ack.DesiredState;
                         PairedDisplayName = ack.DisplayName;
+                        LastDownedReason = ack.DownedReason;
                         await ReconcileDownedAsync(ack, runner, ct);
+                        ReconcileDownOverlay(ack, id, model);
                         if (ack.Directives is { Count: > 0 })
                         {
                             ConsumedDirectives.AddRange(ack.Directives);
@@ -270,6 +280,42 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
             Wallpaper.Restore(cfg.DataDir);
             _downedContentApplied = null;
             Console.WriteLine("downed cleared — baseline wallpaper restored");
+        }
+    }
+
+    /// <summary>Sticky downed overlay lifecycle (no expiration): shown once per downed episode,
+    /// never auto-dismisses. A staff bypass on the machine closes the child (detected via the handle);
+    /// it is NOT re-shown for the rest of that episode — only a flip to active (which also kills a
+    /// live overlay) and back to downed starts a new episode. Agent restart = new episode: the
+    /// overlay comes back up, which is the point of a no-expiry marker on a rebooted dead PC.</summary>
+    private void ReconcileDownOverlay(AckEnvelope ack, AgentIdentity id, string? model)
+    {
+        if (ack.DesiredState == "downed")
+        {
+            if (_downOverlay is { } h)
+            {
+                if (!h.Alive)
+                {
+                    _downOverlay = null;
+                    _downOverlayDismissed = true;
+                    Console.WriteLine("downed overlay bypassed by staff — machine stays downed; no re-show until the operator flips it active");
+                }
+                return;
+            }
+            if (_downOverlayDismissed) return;
+            var name = string.IsNullOrWhiteSpace(ack.DisplayName) ? $"PC {id.DevicePin}" : ack.DisplayName;
+            _downOverlay = DownOverlaySurface(new DownedOverlayRequest(name, id.DevicePin, id.ClientId, model, ack.DownedReason));
+            if (_downOverlay is null) _downOverlayDismissed = true;   // spawn failed — no hot retry every beat
+            else Console.WriteLine($"downed overlay up — no expiry (bypass: B key or BYPASS chip) — note: {ack.DownedReason ?? "n/a"}");
+        }
+        else
+        {
+            if (_downOverlay is { } h)
+            {
+                if (h.Alive) { h.Kill(); Console.WriteLine("downed overlay cleared — operator returned machine to active"); }
+                _downOverlay = null;
+            }
+            _downOverlayDismissed = false;
         }
     }
 }

@@ -25,32 +25,54 @@ public static class LocateOverlayWindow
         t.Start();
         t.Join();
     }
+}
 
-    private sealed class OverlayForm : System.Windows.Forms.Form
+/// <summary>Sticky downed overlay — identical renderer to the locate overlay (see OverlayForm),
+/// driven by DownedOverlayRequest: no expiry, amber (#d97706) accent kept from the dashboard's
+/// downed token, clicks ignored, staff bypass via B/ESC key or the drawn BYPASS chip. The agent
+/// supervises its lifetime: killed when the operator returns the machine to active.</summary>
+[SupportedOSPlatform("windows10.0.19041")]
+public static class DownedOverlayWindow
+{
+    public static void Run(DownedOverlayRequest req)
     {
-        private static readonly Color Base = Color.FromArgb(13, 15, 20);      // mockup #0d0f14 stage
-        private static readonly Color Accent = Color.FromArgb(109, 141, 255); // mockup #6d8dff
-        private static readonly Color Fg = Color.FromArgb(230, 230, 234);     // mockup --fg
-        private static readonly Color Muted = Color.FromArgb(155, 155, 166);  // mockup --mut
-        private readonly LocateOverlayRequest _req;
-        private readonly System.Windows.Forms.Timer _timer = new() { Interval = 575 };  // ~1.15s pulse cycle
-        private bool _pulse;
+        var t = new Thread(() => System.Windows.Forms.Application.Run(new OverlayForm(req)));
+        t.SetApartmentState(ApartmentState.STA);
+        t.IsBackground = true;
+        t.Start();
+        t.Join();
+    }
+}
 
-        public OverlayForm(LocateOverlayRequest req)
-        {
-            _req = req;
-            Text = $"LOCATE — {req.DisplayName}";
-            FormBorderStyle = FormBorderStyle.None;
-            StartPosition = FormStartPosition.Manual;
-            Bounds = SystemInformation.VirtualScreen;    // span every monitor on the box
-            TopMost = true;
-            ShowInTaskbar = false;
-            BackColor = Base;
-            ForeColor = Fg;
-            DoubleBuffered = true;
-            KeyPreview = true;
-            KeyDown += (_, e) => { if (e.KeyCode == System.Windows.Forms.Keys.Escape) Close(); };
-            MouseDown += (_, _) => Close();
+internal sealed class OverlayForm : System.Windows.Forms.Form
+{
+    private static readonly Color Base = Color.FromArgb(13, 15, 20);      // mockup #0d0f14 stage
+    private static readonly Color Fg = Color.FromArgb(230, 230, 234);     // mockup --fg
+    private static readonly Color Muted = Color.FromArgb(155, 155, 166);  // mockup --mut
+    private readonly IOverlayView _view;
+    private readonly Color _accent;                                       // per-state palette token
+    private readonly System.Windows.Forms.Timer _timer = new() { Interval = 575 };  // ~1.15s pulse cycle
+    private bool _pulse;
+    private RectangleF _bypassRect;                                       // hit area for the sticky downed bypass
+
+    public OverlayForm(IOverlayView view)
+    {
+        _view = view;
+        _accent = ColorTranslator.FromHtml(view.AccentHex);
+        Text = $"{(view.HasCountdown ? "LOCATE" : "OUT OF SERVICE")} — {view.DisplayName}";
+        FormBorderStyle = FormBorderStyle.None;
+        StartPosition = FormStartPosition.Manual;
+        Bounds = SystemInformation.VirtualScreen;    // span every monitor on the box
+        TopMost = true;
+        ShowInTaskbar = false;
+        BackColor = Base;
+        ForeColor = Fg;
+        DoubleBuffered = true;
+        KeyPreview = true;
+        // locate: ESC dismisses. downed: B (or ESC) is the staff bypass — never a timed close.
+        KeyDown += (_, e) => { if (e.KeyCode == System.Windows.Forms.Keys.Escape || (!view.HasCountdown && e.KeyCode == System.Windows.Forms.Keys.B)) Close(); };
+        // locate: any click dismisses. downed: sticky — only the BYPASS chip does.
+        MouseDown += (_, e) => { if (view.HasCountdown || _bypassRect.Contains(e.Location)) Close(); };
             Shown += (_, _) =>
             {
                 BringToFront();
@@ -70,10 +92,10 @@ public static class LocateOverlayWindow
                 }
                 Focus();
             };
-            _timer.Tick += (_, _) =>
-            {
-                _pulse = !_pulse;
-                if (!_req.ShouldShow(DateTimeOffset.UtcNow.ToUnixTimeSeconds())) { Close(); return; }
+        _timer.Tick += (_, _) =>
+        {
+            _pulse = !_pulse;
+            if (!_view.ShouldShow(DateTimeOffset.UtcNow.ToUnixTimeSeconds())) { Close(); return; }
                 ForceTopmost();                           // reclaim z-order from anything that raised itself
                 Invalidate();
             };
@@ -145,23 +167,23 @@ public static class LocateOverlayWindow
             DrawGlow(g, new Rectangle((int)(0.45f * w), (int)(0.55f * h), (int)(0.8f * w), (int)(0.7f * h)), Color.FromArgb(45, 27, 20, 48));
 
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var name = _req.DisplayName.ToUpperInvariant();
-            var qr = Qr.Modules(_req.QrPayload());
-            var L = OverlayLayout.Compute(w, h, qr.Length, name, _req.MetaLine());
+            var name = _view.DisplayName.ToUpperInvariant();
+            var qr = Qr.Modules(_view.QrPayload());
+            var L = OverlayLayout.Compute(w, h, qr.Length, name, _view.MetaLine());
 
             // Pulsing accent border (mockup: 4px, 14px inset, rounded, glow at peak).
             var border = RoundRect(L.BorderInset, L.BorderInset, w - 2 * L.BorderInset, h - 2 * L.BorderInset, 14 * L.Scale);
-            using (var glowPen = new Pen(Color.FromArgb(_pulse ? 60 : 20, Accent), L.BorderWidth * 3f))
+            using (var glowPen = new Pen(Color.FromArgb(_pulse ? 60 : 20, _accent), L.BorderWidth * 3f))
                 g.DrawPath(glowPen, border);
-            using (var pen = new Pen(Color.FromArgb(_pulse ? 255 : 110, Accent), L.BorderWidth))
+            using (var pen = new Pen(Color.FromArgb(_pulse ? 255 : 110, _accent), L.BorderWidth))
                 g.DrawPath(pen, border);
             border.Dispose();
 
             // Id block — kicker (letter-spaced accent), giant name, strong-run meta.
             var idBudget = Math.Max(100, L.QrX - L.IdLeft - L.Gap * 0.5f);
-            DrawText(g, Spaced("LOCATE — THIS MACHINE"), L.KickerSize, FontStyle.Bold, Accent, L.IdLeft, L.KickerY, idBudget);
+            DrawText(g, Spaced(_view.Kicker), L.KickerSize, FontStyle.Bold, _accent, L.IdLeft, L.KickerY, idBudget);
             DrawText(g, name, L.NameSize, FontStyle.Bold, Fg, L.IdLeft, L.NameY, idBudget);
-            DrawRuns(g, _req.MetaRuns(), L.MetaSize, Muted, Fg, L.IdLeft, L.MetaY, idBudget);
+            DrawRuns(g, _view.MetaRuns(), L.MetaSize, Muted, Fg, L.IdLeft, L.MetaY, idBudget);
 
             // White rounded QR card with black modules + hanging caption (identical payload to the label).
             int card = L.QrCardPx;
@@ -177,14 +199,34 @@ public static class LocateOverlayWindow
                         g.FillRectangle(dark, ox + x * px, oy + y * px, px, px);
             DrawCentered(g, "scan = device identity (same payload as label)", L.QrLabelSize, FontStyle.Regular, Muted, L.QrLabelY, (int)L.QrX + card / 2);
 
-            // Countdown top-right (mockup), dismiss hint bottom-center.
+            // Countdown top-right (mockup) for locate; the sticky downed overlay has no expiry and
+            // shows a pulsing BYPASS chip bottom-right instead. Dismiss hint stays bottom-center.
             var cf = new Font("Segoe UI", L.CountSize, FontStyle.Bold, GraphicsUnit.Pixel);
-            var sec = $"{_req.SecondsLeft(now)}s";
-            var secSz = g.MeasureString(sec, cf);
-            g.DrawString(sec, cf, new SolidBrush(Accent), w - 36 * L.Scale - secSz.Width, 28 * L.Scale);
-            cf.Dispose();
-            DrawRight(g, "auto-dismiss", Math.Max(10, L.CountSize * 0.55f), FontStyle.Regular, Muted, w - 36 * L.Scale, 28 * L.Scale + secSz.Height);
-            DrawCentered(g, "click anywhere or press ESC to dismiss", L.HintSize, FontStyle.Regular, Muted, L.HintY, w / 2);
+            if (_view.HasCountdown)
+            {
+                var sec = $"{_view.SecondsLeft(now)}s";
+                var secSz = g.MeasureString(sec, cf);
+                g.DrawString(sec, cf, new SolidBrush(_accent), w - 36 * L.Scale - secSz.Width, 28 * L.Scale);
+                cf.Dispose();
+                DrawRight(g, "auto-dismiss", Math.Max(10, L.CountSize * 0.55f), FontStyle.Regular, Muted, w - 36 * L.Scale, 28 * L.Scale + secSz.Height);
+            }
+            else
+            {
+                const string chip = "BYPASS  (B)";
+                var chipSz = g.MeasureString(chip, cf);
+                float cw = chipSz.Width + 28 * L.Scale, chh = chipSz.Height + 12 * L.Scale;
+                _bypassRect = new RectangleF(w - 36 * L.Scale - cw, L.HintY - chh - 18 * L.Scale, cw, chh);
+                using var chipPath = RoundRect(_bypassRect.X, _bypassRect.Y, cw, chh, 10 * L.Scale);
+                using var chipFill = new SolidBrush(Color.FromArgb(_pulse ? 40 : 18, _accent));
+                g.FillPath(chipFill, chipPath);
+                using var chipPen = new Pen(Color.FromArgb(_pulse ? 255 : 165, _accent), Math.Max(1.5f, 2f * L.Scale));
+                g.DrawPath(chipPen, chipPath);
+                using var chipAcc = new SolidBrush(_accent);
+                g.DrawString(chip, cf, chipAcc, _bypassRect.X + 14 * L.Scale, _bypassRect.Y + 6 * L.Scale);
+                cf.Dispose();
+                DrawRight(g, "no expiry — stays until bypass or operator clears", Math.Max(10, L.CountSize * 0.55f), FontStyle.Regular, Muted, w - 36 * L.Scale, _bypassRect.Y - L.CountSize * 0.8f);
+            }
+            DrawCentered(g, _view.DismissHint, L.HintSize, FontStyle.Regular, Muted, L.HintY, w / 2);
         }
 
         private static string Spaced(string s)
@@ -270,5 +312,4 @@ public static class LocateOverlayWindow
             g.DrawString(text, f, new SolidBrush(color), centerX - sz.Width / 2, y);
         }
     }
-}
 #endif

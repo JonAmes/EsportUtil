@@ -99,7 +99,10 @@ immutable identity (`device_pin`, `client_id`), operator metadata (`display_name
 the agent converges to it, so the downed wallpaper is re-applied after reboots and
 logons. Downed is visual status only (wallpaper swap), never a session lock.
 `downed_content_id` selects the Content Library out-of-service image;
-`downed_reason` is the operator note. Liveness is derived (last heartbeat vs
+`downed_reason` is the operator note — it also rides the heartbeat **ack**
+(`downed_reason`) so the agent can raise the sticky downed overlay
+(`--downed-overlay`: no expiry, staff bypass, killed on flip to active).
+Liveness is derived (last heartbeat vs
 timeout), never stored as a flag. Transient one-shot directives (e.g. `locate`
 with expiry) ride the heartbeat ack and are **not** persisted in the registry.
 
@@ -111,7 +114,7 @@ The agent serves a read-only client dashboard on **127.0.0.1 only**
 identity (`client_id`, `device_pin`), link health (`registered`, `last_ack_at`,
 `last_ack_ok`, `last_ack_error`), the operator's `display_name` (streamed down on
 heartbeat acks — `null` while pairing is pending), convergence state
-(`desired_state`, `last_report_at`, `reports_sent`, `report_hash`), the current
+(`desired_state`, `downed_reason`, `last_report_at`, `reports_sent`, `report_hash`), the current
 manifest (`machine_model`, `games`, `duplicates`) and the last 20 executed
 server-issued jobs (`recent_jobs`). It is a view, not a control plane: no
 endpoint here mutates fleet state, and closing the page never pauses
