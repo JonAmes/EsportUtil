@@ -5,6 +5,7 @@ data/
 # .NET build output
 bin/
 obj/
+dist/
 *.user
 
 # Working docs — kept local only, not in the remote repo
