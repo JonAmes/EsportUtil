@@ -31,16 +31,22 @@ public sealed class DeviceRegistry
 {
     private static readonly Regex PinRx = new("^[0-9]{4}$", RegexOptions.Compiled);
     private readonly string _path;
+    private readonly string _revokedPath;
     private readonly object _gate = new();
     private readonly Dictionary<string, RegistryEntry> _devices = new();
+    private readonly HashSet<string> _revoked = new();   // offboarded client_ids — never re-register
 
     public DeviceRegistry(string dataDir)
     {
         Directory.CreateDirectory(dataDir);
         _path = Path.Combine(dataDir, "registry.json");
+        _revokedPath = Path.Combine(dataDir, "revoked.json");
         if (File.Exists(_path))
             foreach (var e in Wire.FromJson<List<RegistryEntry>>(File.ReadAllText(_path)) ?? new())
                 _devices[e.ClientId] = e;
+        if (File.Exists(_revokedPath))
+            foreach (var id in Wire.FromJson<List<string>>(File.ReadAllText(_revokedPath)) ?? new())
+                _revoked.Add(id);
     }
 
     public bool TryRegister(string clientId, string devicePin, string? machineModel, out RegistryEntry entry)
@@ -48,6 +54,7 @@ public sealed class DeviceRegistry
         if (!PinRx.IsMatch(devicePin)) { entry = null!; return false; }
         lock (_gate)
         {
+            if (_revoked.Contains(clientId)) { entry = null!; return false; }   // offboarded: hard gate
             if (_devices.TryGetValue(clientId, out var existing))
             {
                 entry = existing;
@@ -140,6 +147,22 @@ public sealed class DeviceRegistry
         }
     }
 
+    /// <summary>Operator offboarding: remove the device AND tombstone its client_id so the same
+    /// identity can never silently re-register. A still-running agent gets "revoked" on its next
+    /// call, rotates to a fresh client_id, and returns as a PENDING pairing — operator-gated again.</summary>
+    public bool Offboard(string clientId)
+    {
+        lock (_gate)
+        {
+            if (!_devices.Remove(clientId)) return false;
+            _revoked.Add(clientId);
+            Save();
+            return true;
+        }
+    }
+
+    public bool IsRevoked(string clientId) { lock (_gate) return _revoked.Contains(clientId); }
+
     public bool Exists(string clientId) { lock (_gate) return _devices.ContainsKey(clientId); }
     public bool UpdateModel(string clientId, string? model)
     {
@@ -154,5 +177,9 @@ public sealed class DeviceRegistry
 
     public List<RegistryEntry> Snapshot() { lock (_gate) return _devices.Values.ToList(); }
 
-    private void Save() => File.WriteAllText(_path, Wire.ToJson(_devices.Values.ToList()));
+    private void Save()
+    {
+        File.WriteAllText(_path, Wire.ToJson(_devices.Values.ToList()));
+        File.WriteAllText(_revokedPath, Wire.ToJson(_revoked.ToList()));
+    }
 }

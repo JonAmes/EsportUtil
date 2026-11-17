@@ -73,6 +73,9 @@ td:first-child{min-width:240px}
 .pill.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent)}
 .pill.info{color:var(--info);border-color:color-mix(in srgb,var(--info) 35%,transparent);background:color-mix(in srgb,var(--info) 8%,transparent)}
 .btn{border:1px solid var(--bdr);background:color-mix(in srgb,var(--fg) 4%,transparent);color:var(--fg);border-radius:6px;padding:4px 11px;font-size:12px;font-weight:510;cursor:pointer;transition:all .15s}
+.btn.danger:hover{border-color:#f87171;color:#f87171;background:color-mix(in srgb,#f87171 8%,transparent)}
+.pinx{cursor:pointer}
+.pinx:hover{outline:1px dashed var(--bad,#f87171);outline-offset:2px}
 .btn:hover{background:var(--acc);border-color:var(--acc);color:#fff}
 .btn:disabled{opacity:.35;cursor:default}
 .btn:disabled:hover{background:color-mix(in srgb,var(--fg) 4%,transparent);color:var(--fg)}
@@ -223,6 +226,16 @@ async function toggleDown(cid, on){
   refresh();
 }
 async function locate(cid){ await api('/api/locate/'+cid, {}); refresh(); }
+
+let _devById = {};
+async function offboard(cid){
+  const dev = _devById[cid] || {};
+  const label = dev.display_name && !dev.pending ? dev.display_name : 'PIN ' + (dev.device_pin || '?');
+  if (!confirm('Offboard ' + label + '?\n\nThis removes it from the fleet and REVOKES its PIN and identity — that client_id can never re-register.\nIf the agent is still running on the PC, it will mint a new identity and return as an unnamed PENDING device that you must name (or offboard again).')) return;
+  const r = await api('/api/offboard/' + cid, {});
+  if (r && r.ok === false) alert(r.error || 'offboard failed');
+  refresh();
+}
 async function printLabel(cid){
   const r = await api('/api/print-label/'+cid, {});
   if (r.url) window.open(r.url, '_blank');
@@ -265,6 +278,7 @@ async function refresh(){
   document.getElementById('c-pending').textContent = pend.length;
   document.getElementById('c-pending-d').textContent = pend.length ? `${(pend[0].display_name||'?')} · PIN ${pend[0].device_pin} awaiting` : 'none';
 
+  d.devices.forEach(x => _devById[x.client_id] = x);
   document.getElementById('rows').innerHTML = d.devices.map(dev => {
     const issues = dev.issues || [];
     const dotCls = !dev.online ? 'bad' : dev.pending ? 'info' : issues.length ? 'warn' : 'ok';
@@ -288,7 +302,7 @@ async function refresh(){
       <td><span class="dev"><span class="dot ${dotCls}"></span><a href="#" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`},${dev.location?`'${esc(dev.location)}'`:'null'});return false">${esc(dev.display_name)}${dev.pending?' <span class="sub2">(awaiting name)</span>':''}</a></span>
         ${dev.location?`<div class="sub2" style="margin-left:16px">${esc(dev.location)}</div>`:''}
         ${dev.machine_model?`<div class="sub2" style="margin-left:16px">${esc(dev.machine_model)}</div>`:''}${dupNote}</td>
-      <td><span class="pill ${dev.online?'ok':'bad'} mono">${esc(dev.device_pin)}</span></td>
+      <td><span class="pill ${dev.online?'ok':'bad'} mono pinx" title="Revoke PIN ${esc(dev.device_pin)} and offboard this PC" onclick="offboard('${dev.client_id}')">${esc(dev.device_pin)}&nbsp;<span style="opacity:.5">✕</span></span></td>
       <td><div class="hb"><i style="width:${hbW}%;background:${hbC}"></i></div><div class="sub2 mono" style="margin-top:3px">${agoTxt}</div></td>
       <td class="mono">${dev.games ?? '—'}</td>
       <td style="max-width:340px">${chips}${jobs}</td>
@@ -300,6 +314,7 @@ async function refresh(){
       <td>
         <button class="btn" ${dev.online?'':'disabled'} onclick="locate('${dev.client_id}')">locate</button>
         <button class="btn" onclick="printLabel('${dev.client_id}')">label</button>
+        <button class="btn danger" title="Offboard this PC — remove it from the fleet and revoke its PIN" onclick="offboard('${dev.client_id}')">&#128465;</button>
       </td>
     </tr>`;
   }).join('') || '<tr><td colspan="8" style="color:var(--mut)">no agents registered yet — onboard a PC with its PIN</td></tr>';

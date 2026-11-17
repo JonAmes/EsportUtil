@@ -26,6 +26,17 @@ public static class Identity
         return idNew;
     }
 
+    /// <summary>Offboarded by the operator: burn the persisted client_id and mint a fresh one.
+    /// The PIN is deterministically re-derived from the same machine seed, so the machine keeps
+    /// its human-recognizable badge and re-enters pairing as a NEW pending device.</summary>
+    public static AgentIdentity Rotate(string dataDir)
+    {
+        var path = Path.Combine(dataDir, "esportsutil.identity.json");
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (IOException) { }
+        return LoadOrCreate(dataDir);
+    }
+
     private static string MachineSeed()
     {
         if (OperatingSystem.IsWindows())
@@ -64,7 +75,13 @@ public sealed class AgentClient(HttpClient http, EsportsConfig cfg, AgentIdentit
     {
         var ack = await PostAckAsync(http, $"{cfg.ServerUrl}/api/register",
             new RegisterRequest(id.ClientId, id.DevicePin, machineModel), ct);
-        return ack?.Ok ?? false;
+        if (ack?.Ok == true) return true;
+        if (ack?.Error?.Contains("offboarded") == true)
+        {
+            id = Identity.Rotate(cfg.DataDir);
+            Console.WriteLine("OPERATOR OFFBOARDED THIS MACHINE — new client_id minted; awaiting re-pairing");
+        }
+        return false;
     }
 
     public async Task<AckEnvelope?> HeartbeatAsync(string agentVersion, CancellationToken ct = default)
@@ -138,6 +155,11 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                     if (ack is null || !ack.Ok)
                     {
                         if (ack?.Error == "unknown client_id — re-register") registered = false;
+                        else if (ack?.Error?.Contains("offboarded") == true)
+                        {
+                            registered = false;       // next register rotates identity (see RegisterAsync)
+                            Console.WriteLine("heartbeat refused: offboarded by operator — re-pairing required");
+                        }
                     }
                     else
                     {

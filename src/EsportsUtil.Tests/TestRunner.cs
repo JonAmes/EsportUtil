@@ -122,6 +122,43 @@ Check(await Until(() => Task.FromResult(overlayReqs.Count == 1
 await Task.Delay(3500); // 3+ heartbeat/report cycles with unchanged content
 Check(loop.ReportsSent <= 2, "T8f content-hash dedupe: no re-upload of unchanged manifest");
 
+// ---------- T19: operator offboarding (PIN revoke + identity tombstone) ----------
+{
+    async Task<(int code, AckEnvelope ack)> PostRaw(string path, object body)
+    {
+        var r = await probe.PostAsync(path, new StringContent(Wire.ToJson(body), System.Text.Encoding.UTF8, "application/json"));
+        return ((int)r.StatusCode, Wire.FromJson<AckEnvelope>(await r.Content.ReadAsStringAsync())!);
+    }
+
+    var t19 = Guid.NewGuid().ToString();
+    Check(await PostAck("/api/register", new RegisterRequest(t19, "7777", "Ghost Tower")), "T19a one-shot device registers via API");
+    Check((await State()).devices.Any(d => d.client_id == t19), "T19b registered device visible in /api/state");
+    Check(await PostAck("/api/offboard/" + t19, new { }), "T19c operator offboards (trashcan / PIN-revoke action)");
+    Check(!(await State()).devices.Any(d => d.client_id == t19), "T19d offboarded device is gone from /api/state");
+    var (rc, rack) = await PostRaw("/api/register", new RegisterRequest(t19, "7777", "Ghost Tower"));
+    Check(rc == 403 && rack.Error!.Contains("offboarded"), "T19e revoked client_id can never re-register (tombstone)");
+    var (hc, hack) = await PostRaw("/api/heartbeat", new HeartbeatRequest(t19, "7777", DateTimeOffset.UtcNow, AgentInfo.Version));
+    Check(hc == 410 && hack.Error!.Contains("offboarded"), "T19f heartbeat from a revoked identity refused outright");
+    Check(await PostRaw("/api/offboard/" + Guid.NewGuid(), new { }) is { code: 404 }, "T19g offboarding an unknown device fails cleanly (404)");
+
+    Check(reg.Offboard("c1") && !reg.Snapshot().Any(x => x.ClientId == "c1") && reg.IsRevoked("c1"),
+        "T19h registry Offboard removes entry and tombstones client_id");
+    Check(!reg.TryRegister("c1", "0042", null, out _), "T19i tombstoned client_id blocked at registry level too");
+    Check(new DeviceRegistry(Path.Combine(tmp, "reg")).IsRevoked("c1"), "T19j revoked tombstone survives server restart (revoked.json)");
+
+    var rotDir = Path.Combine(tmp, "rot-identity");
+    var idA = Identity.LoadOrCreate(rotDir);
+    var idB = Identity.Rotate(rotDir);
+    Check(idB.ClientId != idA.ClientId && idB.DevicePin == idA.DevicePin,
+        "T19k rotated identity: new client_id, machine PIN kept for re-pairing");
+
+    var dashPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..",
+        "EsportsUtil", "wwwroot", "dashboard.html"));
+    var dashHtml = File.ReadAllText(dashPath);
+    Check(dashHtml.Contains("/api/offboard/") && dashHtml.Contains("btn danger") && dashHtml.Contains("pinx"),
+        "T19l dashboard wires trashcan AND clickable PIN pill to /api/offboard");
+}
+
 // liveness: agent stops heartbeating -> critical alert fires
 cts.Cancel(); await loopTask;
 Check(await Until(async () => (await State()).alerts.Any(a => a.type == "heartbeat_lost" && a.severity == "critical"), 15),

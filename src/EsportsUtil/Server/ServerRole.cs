@@ -40,6 +40,7 @@ public static class ServerRole
         var hub = new AlertHub();
         var labelsDir = Path.Combine(cfg.DataDir, "labels");
         var printer = new FileLabelPrinter(labelsDir);
+        const string RevokedMsg = "offboarded by operator — identity revoked";
         var issueHashes = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
         var jobs = new JobStore(cfg.DataDir);
 
@@ -61,6 +62,8 @@ public static class ServerRole
         // ---- onboarding gate ----
         app.MapPost("/api/register", (RegisterRequest req) =>
         {
+            if (registry.IsRevoked(req.ClientId))
+                return Results.Json(new AckEnvelope(false, RevokedMsg), Wire.Options, statusCode: 403);
             if (!registry.TryRegister(req.ClientId, req.DevicePin, req.MachineModel, out var e))
                 return Results.Json(new AckEnvelope(false, "invalid or missing device_pin"), Wire.Options, statusCode: 400);
             if (e.Pending)
@@ -72,6 +75,8 @@ public static class ServerRole
         // ---- heartbeat: ack carries desired state, unexpired directives, and the next queued job ----
         app.MapPost("/api/heartbeat", (HeartbeatRequest req) =>
         {
+            if (registry.IsRevoked(req.ClientId))
+                return Results.Json(new AckEnvelope(false, RevokedMsg), Wire.Options, statusCode: 410);
             if (!registry.Heartbeat(req.ClientId, out var e))
                 return Results.Json(new AckEnvelope(false, "unknown client_id — re-register"), Wire.Options, statusCode: 404);
             jobs.FailAbandoned(cfg.JobTimeoutMin);   // zombie-job sweep, cheap list scan
@@ -98,6 +103,8 @@ public static class ServerRole
         // ---- local manifest report; content-hash dedupe so unchanged states cost ~zero ----
         app.MapPost("/api/report", (LocalManifest report) =>
         {
+            if (registry.IsRevoked(report.ClientId))
+                return Results.Json(new AckEnvelope(false, RevokedMsg), Wire.Options, statusCode: 410);
             if (!registry.Exists(report.ClientId))
                 return Results.Json(new AckEnvelope(false, "unknown client_id — re-register"), Wire.Options, statusCode: 404);
             var hash = ReportHash.Of(report);
@@ -121,6 +128,19 @@ public static class ServerRole
             registry.SetDowned(req.ClientId, req.DesiredState, req.DownedContentId, req.DownedReason)
                 ? Results.Json(new AckEnvelope(true), Wire.Options)
                 : Results.Json(new AckEnvelope(false, "unknown device or invalid state"), Wire.Options, statusCode: 400));
+
+        // Offboard: operator removes a PC and revokes its PIN/identity. The client_id is tombstoned
+        // (revoked.json) so it can never re-register; a live agent rotates identity and re-enters
+        // as a pending pairing, gated by the operator again. Report/history files stay for forensics.
+        app.MapPost("/api/offboard/{clientId}", (string clientId) =>
+        {
+            var e = registry.Snapshot().FirstOrDefault(x => x.ClientId == clientId);
+            if (!registry.Offboard(clientId))
+                return Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404);
+            _ = hub.PublishAsync(new Alert("offboarded", "warn",
+                $@"PIN revoked — {(string.IsNullOrWhiteSpace(e!.DisplayName) ? "unpaired device" : e.DisplayName)} ({e.DevicePin})", clientId, null, DateTimeOffset.UtcNow));
+            return Results.Json(new AckEnvelope(true), Wire.Options);
+        });
 
         app.MapPost("/api/locate/{clientId}", (string clientId) =>
             registry.QueueDirective(clientId, new Directive("locate", registry.DisplayNameOf(clientId),
