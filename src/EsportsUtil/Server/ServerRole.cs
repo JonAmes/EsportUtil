@@ -43,6 +43,7 @@ public static class ServerRole
         const string RevokedMsg = "offboarded by operator — identity revoked";
         var issueHashes = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
         var jobs = new JobStore(cfg.DataDir);
+        var venueLogo = new VenueLogo(cfg.DataDir);
 
         builder.Services.AddHostedService(_ => new LivenessMonitor(registry, hub, cfg.HeartbeatTimeoutSec));
 
@@ -155,7 +156,15 @@ public static class ServerRole
             var e = registry.Snapshot().FirstOrDefault(x => x.ClientId == clientId);
             if (e is null) return Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404);
             if (e.Pending) return Results.Json(new AckEnvelope(false, "name this device (and set its location) before printing its label"), Wire.Options, statusCode: 400);
-            var path = printer.Print(e.DisplayName, e.Location);
+            string? logoUri = null;   // embed the venue logo so the label artifact prints standalone
+            var lpath = venueLogo.FindPath();
+            if (lpath is not null)
+            {
+                var lb = File.ReadAllBytes(lpath);
+                var lk = ImageFormats.Sniff(lb);
+                if (lk is not null) logoUri = $"data:{lk.Value.Mime};base64,{Convert.ToBase64String(lb)}";
+            }
+            var path = printer.Print(e.DisplayName, e.Location, logoUri);
             return Results.Json(new { ok = true, artifact = path, url = "/labels/" + Path.GetFileName(path) }, Wire.Options);
         });
 
@@ -176,6 +185,40 @@ public static class ServerRole
             var path = content.FilePathFor(contentId);
             return path is null ? Results.NotFound() : Results.File(path, "application/octet-stream");
         });
+
+        // ---- venue settings: logo (settings page posts raw bytes; magic-bytes gate + size cap, never trust name/MIME) ----
+        app.MapGet("/api/settings", () => Results.Json(new { logo = venueLogo.Info(), max_bytes = ImageFormats.MaxLogoBytes }, Wire.Options));
+        app.MapPost("/settings/logo", async (HttpRequest req) =>
+        {
+            if (req.ContentLength is > ImageFormats.MaxLogoBytes)
+                return Results.Json(new AckEnvelope(false, "logo exceeds the 4 MB cap"), Wire.Options, statusCode: 413);
+            using var ms = new MemoryStream();
+            var buf = new byte[81920];
+            long total = 0; int n;
+            while ((n = await req.Body.ReadAsync(buf)) > 0)
+            {
+                ms.Write(buf, 0, n); total += n;
+                if (total > ImageFormats.MaxLogoBytes)
+                    return Results.Json(new AckEnvelope(false, "logo exceeds the 4 MB cap"), Wire.Options, statusCode: 413);
+            }
+            var bytes = ms.ToArray();
+            var known = ImageFormats.Sniff(bytes);
+            if (known is null)
+                return Results.Json(new AckEnvelope(false, "not a supported image — header must be PNG, JPEG, BMP, GIF or WEBP"), Wire.Options, statusCode: 415);
+            return Results.Json(new { ok = true, logo = venueLogo.Save(bytes, known.Value.Ext) }, Wire.Options);
+        });
+        app.MapGet("/settings/logo", (HttpResponse res) =>
+        {
+            var p = venueLogo.FindPath();
+            if (p is null) return Results.NotFound();
+            var head = new byte[16];
+            using (var fs = File.OpenRead(p)) fs.ReadExactly(head.AsSpan(0, (int)Math.Min(16, fs.Length)));
+            res.Headers["Cache-Control"] = "no-store";   // logo swaps must show immediately
+            return Results.File(p, ImageFormats.Sniff(head)?.Mime ?? "application/octet-stream");
+        });
+        app.MapDelete("/settings/logo", () =>
+            venueLogo.Delete() ? Results.Json(new AckEnvelope(true), Wire.Options)
+                               : Results.Json(new AckEnvelope(false, "no logo set"), Wire.Options, statusCode: 404));
 
         // ---- Phase 4 jobs: creation guards, agent state reports ----
         app.MapPost("/api/jobs", (NewJobRequest req) =>
@@ -319,6 +362,10 @@ public static class ServerRole
         app.MapGet("/", () => File.Exists(dashPath)
             ? Results.Content(File.ReadAllText(dashPath), "text/html")
             : Results.Text("dashboard.html missing next to esportsutil"));
+        var settingsPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "settings.html");
+        app.MapGet("/settings", () => File.Exists(settingsPath)
+            ? Results.Content(File.ReadAllText(settingsPath), "text/html")
+            : Results.Text("settings.html missing next to esportsutil"));
 
         return app;
     }

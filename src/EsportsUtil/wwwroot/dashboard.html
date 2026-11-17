@@ -25,7 +25,8 @@ body{margin:0;min-height:100vh;background:
 
 /* header */
 .head{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--hair);padding-bottom:12px;flex-wrap:wrap}
-.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 45%,#22d3ee));display:inline-flex;align-items:center;justify-content:center;font-weight:700;color:#fff;transform:translateY(4px);box-shadow:0 0 18px color-mix(in srgb,var(--acc) 50%,transparent)}
+.logo{width:26px;height:26px;border-radius:7px;position:relative;overflow:hidden;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 45%,#22d3ee));display:inline-flex;align-items:center;justify-content:center;font-weight:700;color:#fff;transform:translateY(4px);box-shadow:0 0 18px color-mix(in srgb,var(--acc) 50%,transparent)}
+.logo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:7px}
 h1{font-size:18px;font-weight:590;letter-spacing:-.4px;margin:0}
 .chip{border:1px solid var(--bdr);border-radius:999px;padding:2px 10px;font-size:11px;color:var(--mut)}
 .chip b{color:var(--fg);font-weight:510}
@@ -130,10 +131,11 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
 <body>
 <div class="esu">
   <div class="head">
-    <span class="logo">E</span>
+    <span class="logo" id="brand">E</span>
     <h1>E-Sports Dashboard</h1>
     <span class="chip">manifest <b id="c-manifest">–</b></span>
     <span class="chip mono">factory <b id="c-factory">–</b> entries</span>
+    <a class="chip" href="/settings" style="text-decoration:none;color:var(--acc)">settings</a>
     <span class="live"><span class="dot ok" id="c-live-dot"></span> <span id="c-live">server online</span> · <span id="clock">…</span></span>
   </div>
 
@@ -326,6 +328,9 @@ async function refresh(){
 }
 refresh();
 setInterval(refresh, 3000);
+async function brand(){try{const s=await (await fetch('/api/settings')).json();if(s.logo)
+  document.getElementById('brand').innerHTML=`<img src="/settings/logo?v=${s.logo.updated_unix}" alt="venue logo">`;}catch{}}
+brand();setInterval(brand, 60000);
 </script>
 </body>
 </html>

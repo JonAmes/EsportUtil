@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using EsportsUtil.Agent;
 using EsportsUtil.Core;
@@ -632,6 +633,65 @@ Console.WriteLine("tee-marker-t22");
 Console.SetOut(t22OrigOut);
 Check(File.ReadAllText(Lifecycle.LogPath(Path.Combine(tmp, "logtest"))).Contains("tee-marker-t22"),
     "T22k TeeConsoleToLog appends console output to <dataDir>/esportsutil.log (headless modes have no console reader)");
+
+// ---------- T23: venue logo settings (drag-drop upload, magic-bytes gate) ----------
+var t23Png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4 };
+var t23Jpg = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 5, 6, 7 };
+var t23Bmp = new byte[] { (byte)'B', (byte)'M', 1, 2, 3 };
+Check(ImageFormats.Sniff(t23Png)?.Ext == "png" && ImageFormats.Sniff(t23Jpg)?.Ext == "jpg"
+    && ImageFormats.Sniff(t23Bmp)?.Ext == "bmp"
+    && ImageFormats.Sniff("GIF89a...."u8)?.Ext == "gif"
+    && ImageFormats.Sniff(System.Text.Encoding.ASCII.GetBytes("RIFF\0\0\0\0WEBPVP8 "))?.Ext == "webp",
+    "T23a sniff recognizes PNG/JPEG/BMP/GIF/WEBP by magic bytes");
+Check(ImageFormats.Sniff("MZ"u8) is null && ImageFormats.Sniff("hello world"u8) is null
+    && ImageFormats.Sniff(ReadOnlySpan<byte>.Empty) is null,
+    "T23b sniff rejects executables, plain text and empty bodies (never trusts name/client MIME)");
+var setUrl = "http://127.0.0.1:4396";
+var setCfg = new EsportsConfig { Role = "server", ServerUrl = setUrl, DataDir = Path.Combine(tmp, "settings-srv") };
+using var setApp = ServerRole.BuildApp(setCfg); await setApp.StartAsync();
+using var setProbe = new HttpClient { BaseAddress = new Uri(setUrl), Timeout = TimeSpan.FromSeconds(5) };
+var t23Up = await setProbe.PostAsync("/settings/logo", new ByteArrayContent(t23Png));
+using (var upJ = JsonDocument.Parse(await t23Up.Content.ReadAsStringAsync()))
+    Check((int)t23Up.StatusCode == 200
+        && upJ.RootElement.GetProperty("logo").GetProperty("format").GetString() == "png"
+        && upJ.RootElement.GetProperty("logo").GetProperty("bytes").GetInt32() == t23Png.Length
+        && Math.Abs(upJ.RootElement.GetProperty("logo").GetProperty("updated_unix").GetInt64()
+                    - DateTimeOffset.UtcNow.ToUnixTimeSeconds()) < 300,
+        "T23c POST /settings/logo stores a real PNG; info reports format, size, and a plausible Unix timestamp");
+var t23Got = await setProbe.GetAsync("/settings/logo");
+Check((int)t23Got.StatusCode == 200 && t23Got.Content.Headers.ContentType?.MediaType == "image/png"
+    && (await t23Got.Content.ReadAsByteArrayAsync()).SequenceEqual(t23Png)
+    && t23Got.Headers.CacheControl?.NoStore == true,
+    "T23d GET /settings/logo serves the bytes with the sniffed MIME and no-store cache");
+var t23Bad = await setProbe.PostAsync("/settings/logo",
+    new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes("<svg onload=alert(1)>.svg")));
+var t23Big = await setProbe.PostAsync("/settings/logo", new ByteArrayContent(new byte[(int)ImageFormats.MaxLogoBytes + 1]));
+var t23Del = await setProbe.DeleteAsync("/settings/logo");
+var t23After = await setProbe.GetAsync("/settings/logo");
+Check((int)t23Bad.StatusCode == 415 && (int)t23Big.StatusCode == 413
+    && (int)t23Del.StatusCode == 200 && (int)t23After.StatusCode == 404,
+    "T23e script-carrying SVG → 415, oversize → 413, DELETE then GET → 404");
+await setProbe.PostAsync("/settings/logo", new ByteArrayContent(t23Png));
+var t23Swap = await setProbe.PostAsync("/settings/logo", new ByteArrayContent(t23Jpg));
+var t23Files = Directory.GetFiles(Path.Combine(setCfg.DataDir), "logo.*");
+Check((int)t23Swap.StatusCode == 200 && t23Files.Length == 1 && t23Files[0].EndsWith(".jpg"),
+    "T23f format swap leaves exactly one logo file (stale extension deleted, atomic save)");
+var t23With = FileLabelPrinter.RenderHtml("LAN-PC-99", "Stage A", "data:image/png;base64,AQID");
+var t23No = FileLabelPrinter.RenderHtml("LAN-PC-99", "Stage A", null);
+Check(t23With.Contains("<img src=\"data:image/png;base64,AQID\"") && !t23With.Contains("brand slot")
+    && t23No.Contains("brand slot"),
+    "T23g label brand slot becomes an embedded <img> when a logo is set, placeholder otherwise");
+var t23Page = await setProbe.GetStringAsync("/settings");
+Check(t23Page.Contains("dragover") && t23Page.Contains("dataTransfer") && t23Page.Contains("/settings/logo"),
+    "T23h /settings serves the page whose markup wires dragover/drop upload to the API");
+using (var apiJ = JsonDocument.Parse(await setProbe.GetStringAsync("/api/settings")))
+    Check(apiJ.RootElement.GetProperty("logo").GetProperty("format").GetString() == "jpg"
+        && apiJ.RootElement.GetProperty("max_bytes").GetInt64() == ImageFormats.MaxLogoBytes,
+        "T23i GET /api/settings exposes current logo info + the 4 MB cap for client-side UX checks");
+var t23Del2 = await setProbe.DeleteAsync("/settings/logo");
+var t23Del3 = await setProbe.DeleteAsync("/settings/logo");
+Check((int)t23Del2.StatusCode == 200 && (int)t23Del3.StatusCode == 404,
+    "T23j second DELETE (nothing left) → 404 ack envelope, never throws");
 
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");

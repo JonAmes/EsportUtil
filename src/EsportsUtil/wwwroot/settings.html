@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings — E-Sports</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+/* Same design tokens as dashboard.html (mockup-pinned palette). */
+:root{color-scheme:dark;
+--bg:#0d0f14;--fg:#f7f8f8;--mut:#8a8f98;--acc:#6d8dff;
+--bdr:rgba(255,255,255,.08);--card:rgba(255,255,255,.03);
+--hair:color-mix(in srgb,var(--fg) 7%,transparent);
+--ok:#10b981;--warn:#d97706;--bad:#ef4444;--info:#38bdf8;}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:
+ radial-gradient(120% 90% at 85% -10%,rgba(27,20,48,.55),transparent 60%),
+ radial-gradient(100% 90% at -10% 110%,rgba(22,35,61,.5),transparent 60%),
+ var(--bg);
+ background-attachment:fixed;
+ color:var(--fg);font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;
+ display:flex;flex-direction:column;align-items:center}
+.mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.esu{width:min(680px,100%);min-width:420px;padding:16px 14px 30px;font-variant-numeric:tabular-nums}
+.head{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--hair);padding-bottom:12px;flex-wrap:wrap}
+.logo{width:26px;height:26px;border-radius:7px;position:relative;overflow:hidden;
+ background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 45%,#22d3ee));
+ display:inline-flex;align-items:center;justify-content:center;font-weight:700;color:#fff;
+ transform:translateY(4px);box-shadow:0 0 18px color-mix(in srgb,var(--acc) 50%,transparent)}
+.logo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:7px}
+h1{font-size:18px;font-weight:590;letter-spacing:-.4px;margin:0}
+a.back{color:var(--acc);text-decoration:none;font-size:12px}
+.card{background:var(--card);border:1px solid var(--hair);border-radius:14px;padding:18px;margin-top:16px}
+h2{font-size:13px;margin:0 0 4px;font-weight:590;letter-spacing:.02em}
+.sub{color:var(--mut);font-size:12px;margin:0 0 14px}
+.drop{border:2px dashed color-mix(in srgb,var(--acc) 40%,var(--bdr));border-radius:12px;
+ padding:28px 16px;text-align:center;color:var(--mut);cursor:pointer;transition:.15s;
+ background:rgba(109,141,255,.03);outline:none}
+.drop:hover,.drop:focus-visible{border-color:color-mix(in srgb,var(--acc) 70%,var(--bdr))}
+.drop.over{border-color:var(--acc);background:rgba(109,141,255,.14);color:var(--fg);
+ box-shadow:0 0 24px color-mix(in srgb,var(--acc) 25%,transparent)}
+.drop b{color:var(--fg)}
+#msg{font-size:12px;margin-top:10px;min-height:16px}
+#msg.ok{color:var(--ok)} #msg.err{color:var(--bad)}
+.cur{display:flex;gap:14px;align-items:center;margin-top:14px}
+.frame{width:84px;height:84px;flex:none;border:1px solid var(--hair);border-radius:10px;
+ background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.frame img{max-width:100%;max-height:100%;object-fit:contain}
+.meta{font-size:12px;color:var(--mut)} .meta b{color:var(--fg)}
+button.rm{margin-left:auto;background:transparent;border:1px solid var(--bdr);color:var(--mut);
+ border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px}
+button.rm:hover{color:var(--bad);border-color:var(--bad)}
+.note{font-size:11px;color:var(--mut);margin-top:14px}
+</style>
+</head>
+<body>
+<div class="esu">
+  <div class="head">
+    <span class="logo" id="brand">E</span>
+    <h1>Settings</h1>
+    <a class="back" href="/">← dashboard</a>
+  </div>
+
+  <div class="card">
+    <h2>Venue logo</h2>
+    <p class="sub">Shows on station labels and both dashboards. PNG, JPEG, BMP, GIF or WEBP · max 4&nbsp;MB.</p>
+
+    <div class="drop" id="drop" tabindex="0" role="button"
+         aria-label="Drop a logo image here, or press Enter to browse for a file">
+      <b>Drop an image here</b><br>or click to browse
+    </div>
+    <input type="file" id="file" hidden
+           accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,image/png,image/jpeg,image/bmp,image/gif,image/webp">
+    <div id="msg" role="status"></div>
+
+    <div class="cur" id="cur" hidden>
+      <div class="frame"><img id="curimg" alt="current venue logo"></div>
+      <div class="meta" id="curmeta"></div>
+      <button class="rm" id="rm">Remove</button>
+    </div>
+
+    <div class="note">Files are checked by content, not by name — only genuine image data is
+      accepted, and anything over 4&nbsp;MB is rejected. Uploading replaces the current logo
+      everywhere it appears.</div>
+  </div>
+</div>
+
+<script>
+const MAX = 4 * 1024 * 1024;
+const drop = document.getElementById('drop'), file = document.getElementById('file'), msg = document.getElementById('msg');
+
+const say = (t, c) => { msg.textContent = t; msg.className = c || ''; };
+
+async function load() {
+  try {
+    const s = await (await fetch('/api/settings')).json();
+    const cur = document.getElementById('cur');
+    if (s.logo) {
+      cur.hidden = false;
+      document.getElementById('curimg').src = '/settings/logo?v=' + s.logo.updated_unix;
+      document.getElementById('curmeta').innerHTML =
+        '<b>' + s.logo.format.toUpperCase() + '</b> · ' + (s.logo.bytes < 1024 ? s.logo.bytes + ' B' : Math.round(s.logo.bytes / 1024) + ' KB') + '<br>' +
+        'updated ' + new Date(s.logo.updated_unix * 1000).toLocaleString();
+      const t = document.getElementById('brand');
+      t.innerHTML = '<img src="/settings/logo?v=' + s.logo.updated_unix + '" alt="logo">';
+    } else cur.hidden = true;
+  } catch { }
+}
+
+async function upload(f) {
+  if (!f) return;
+  if (!/\.(png|jpe?g|bmp|gif|webp)$/i.test(f.name) && !/^image\//.test(f.type))
+    return say('That is not an image file (PNG, JPEG, BMP, GIF, WEBP).', 'err');
+  if (f.size > MAX) return say('Image is over 4 MB — pick a smaller file.', 'err');
+  say('Uploading…');
+  try {
+    const r = await fetch('/settings/logo', { method: 'POST', body: f });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      return say(j.error || ('Upload rejected (' + r.status + ').'), 'err');
+    }
+    say('Logo saved — labels and dashboards pick it up.', 'ok');
+    load();
+  } catch (e) { say('Upload failed: ' + e.message, 'err'); }
+}
+
+drop.addEventListener('click', () => file.click());
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } });
+file.addEventListener('change', () => { upload(file.files[0]); file.value = ''; });
+
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; drop.classList.add('over');
+}));
+['dragleave', 'dragend'].forEach(ev => drop.addEventListener(ev, () => drop.classList.remove('over')));
+drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files[0]); });
+
+// dropping anywhere on the page also uploads, so the target doesn't have to be hit exactly
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  if (!drop.contains(e.target)) upload(e.dataTransfer.files[0]);
+});
+
+document.getElementById('rm').addEventListener('click', async () => {
+  await fetch('/settings/logo', { method: 'DELETE' });
+  say('Logo removed — placeholders restored.', 'ok');
+  document.getElementById('cur').hidden = true;
+});
+
+load();
+</script>
+</body>
+</html>

@@ -9,17 +9,19 @@ namespace EsportsUtil.Core;
 /// /labels/ so the dashboard opens it in a tab the operator prints.</summary>
 public interface ILabelPrinter
 {
-    /// <summary>Returns the produced artifact path (print-ready .html label card in fallback).</summary>
-    string Print(string displayName, string? location);
+    /// <summary>Returns the produced artifact path (print-ready .html label card in fallback).
+    /// logoDataUri is an optional base64 data: URI embedded so the single-file label stays
+    /// print-portable with no server dependency at print time.</summary>
+    string Print(string displayName, string? location, string? logoDataUri = null);
 }
 
 public sealed class FileLabelPrinter(string dir) : ILabelPrinter
 {
-    public string Print(string displayName, string? location)
+    public string Print(string displayName, string? location, string? logoDataUri = null)
     {
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, $"label-{Slug(displayName)}.html");
-        File.WriteAllText(path, RenderHtml(Esc(displayName), Esc(location ?? "")));
+        File.WriteAllText(path, RenderHtml(Esc(displayName), Esc(location ?? ""), logoDataUri));
         return path;
     }
 
@@ -38,10 +40,15 @@ public sealed class FileLabelPrinter(string dir) : ILabelPrinter
         s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
 
     /// <summary>Single-file label matching mockups/label.html: white 2x1in sticker, logo
-    /// placeholder left, name + location right. Logo slot stays a dashed box until the brand asset lands.</summary>
-    public static string RenderHtml(string nameEsc, string locEsc)
+    /// slot left, name + location right. With no logo set the slot stays a dashed placeholder;
+    /// with one it becomes a real embedded &lt;img&gt; (data URI — print-portable).</summary>
+    public static string RenderHtml(string nameEsc, string locEsc, string? logoDataUri = null)
     {
         var locHtml = locEsc.Length == 0 ? "" : $"<div class=\"loc\">{locEsc}</div>\n          ";
+        // data URI is server-built base64 (fixed alphabet) — safe inside the attribute.
+        var logoHtml = logoDataUri is null
+            ? "<div class=\"logo\">LOGO<small>brand slot &mdash; fill later</small></div>"
+            : $"<div class=\"logo\"><img src=\"{logoDataUri}\" alt=\"Venue logo\"></div>";
         return """
             <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Station Label</title>
             <style>
@@ -58,6 +65,7 @@ public sealed class FileLabelPrinter(string dir) : ILabelPrinter
               .logo{width:186px;height:186px;flex:none;border-radius:12px;border:2px dashed #c9c9d2;
                     display:flex;align-items:center;justify-content:center;flex-direction:column;gap:4px;
                     color:#b6b6c2;font-size:15px;font-weight:700;letter-spacing:.22em}
+              .logo img{width:100%;height:100%;object-fit:contain;border-radius:12px}
               .logo small{font-size:9px;letter-spacing:.1em;font-weight:400}
               .edge{position:absolute;left:234px;top:14px;bottom:14px;width:1px;background:rgba(0,0,0,.08)}
               .id{display:flex;flex-direction:column;gap:8px;min-width:0;flex:1}
@@ -72,7 +80,7 @@ public sealed class FileLabelPrinter(string dir) : ILabelPrinter
                            .label{box-shadow:none;border-radius:10px}}
             </style></head><body>
               <div class="label">
-                <div class="logo">LOGO<small>brand slot &mdash; fill later</small></div>
+                __LOGO__
                 <div class="edge"></div>
                 <div class="id">
                   <div class="kicker">E-Sports &middot; Station</div>
@@ -82,7 +90,7 @@ public sealed class FileLabelPrinter(string dir) : ILabelPrinter
               </div>
               <button class="print" onclick="window.print()">Print label</button>
             </body></html>
-            """.Replace("__NAME__", nameEsc).Replace("__LOC__", locHtml);
+            """.Replace("__NAME__", nameEsc).Replace("__LOC__", locHtml).Replace("__LOGO__", logoHtml);
     }
 
     // Locate overlay QR protocol (labels no longer carry a QR, but the overlay still does).
