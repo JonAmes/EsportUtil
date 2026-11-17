@@ -6,11 +6,11 @@
 #   ./deploy/publish-win.sh --trim     -> additionally IL-trimmed (opt-in; see BUILD.md caveats)
 #
 # Output is a single self-contained EXE — no .NET install needed on game PCs.
-set -euo pipefail
+set -eu
 cd "$(dirname "$0")/.."
 
 TRIM=false
-[[ "${1:-}" == "--trim" ]] && TRIM=true
+if [ "${1:-}" = "--trim" ]; then TRIM=true; fi
 
 OUT=dist/win-x64
 rm -rf "$OUT"
