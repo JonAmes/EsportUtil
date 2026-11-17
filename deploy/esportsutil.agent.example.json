@@ -1,0 +1,5 @@
+{
+  "role": "agent",
+  "server_url": "http://10.140.0.212:4300",
+  "data_dir": "C:\\ProgramData\\EsportsUtil\\agent"
+}

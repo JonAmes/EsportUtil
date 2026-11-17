@@ -1,0 +1,5 @@
+{
+  "role": "server",
+  "server_url": "http://0.0.0.0:4300",
+  "data_dir": "C:\\ProgramData\\EsportsUtil\\server"
+}
