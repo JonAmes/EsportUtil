@@ -1050,14 +1050,28 @@ return failed;
 
 static double ProcCpu(int pid)
 {
-    var f = File.ReadAllText($"/proc/{pid}/stat").Split(' ');
-    return (long.Parse(f[13]) + long.Parse(f[14])) / 100.0; // utime+stime, USER_HZ=100
+    try
+    {
+        var f = File.ReadAllText($"/proc/{pid}/stat").Split(' ');
+        return (long.Parse(f[13]) + long.Parse(f[14])) / 100.0; // utime+stime, USER_HZ=100
+    }
+    catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException or FormatException)
+    {
+        return double.NaN;   // probe pid died mid-gate: fail the Check line, not the whole suite
+    }
 }
 static double ProcPeakRssMb(int pid)
 {
-    foreach (var line in File.ReadAllLines($"/proc/{pid}/status"))
-        if (line.StartsWith("VmHWM:")) return double.Parse(line.Split(default(char[]), StringSplitOptions.RemoveEmptyEntries)[1]) / 1024.0;
-    return double.MaxValue;
+    try
+    {
+        foreach (var line in File.ReadAllLines($"/proc/{pid}/status"))
+            if (line.StartsWith("VmHWM:")) return double.Parse(line.Split(default(char[]), StringSplitOptions.RemoveEmptyEntries)[1]) / 1024.0;
+        return double.MaxValue;
+    }
+    catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException or FormatException)
+    {
+        return double.NaN;   // same dead-pid race guard as ProcCpu
+    }
 }
 static bool Throws<T>(Action a) where T : Exception
 {
