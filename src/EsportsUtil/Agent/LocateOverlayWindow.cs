@@ -44,6 +44,23 @@ public static class DownedOverlayWindow
     }
 }
 
+/// <summary>Update overlay (T33) — identical renderer, driven by UpdateOverlayRequest: blue
+/// (#007bff) mockup accent, no expiry, and NOTHING dismisses it (no key, no click, no bypass
+/// chip) — the agent owns its whole lifetime and kills it when the install goes terminal. The
+/// meta line re-reads update-progress.json on every paint, so progress streams without any IPC.</summary>
+[SupportedOSPlatform("windows10.0.19041")]
+public static class UpdateOverlayWindow
+{
+    public static void Run(UpdateOverlayRequest req)
+    {
+        var t = new Thread(() => System.Windows.Forms.Application.Run(new OverlayForm(req)));
+        t.SetApartmentState(ApartmentState.STA);
+        t.IsBackground = true;
+        t.Start();
+        t.Join();
+    }
+}
+
 internal sealed class OverlayForm : System.Windows.Forms.Form
 {
     private static readonly Color Base = Color.FromArgb(13, 15, 20);      // mockup #0d0f14 stage
@@ -59,7 +76,7 @@ internal sealed class OverlayForm : System.Windows.Forms.Form
     {
         _view = view;
         _accent = ColorTranslator.FromHtml(view.AccentHex);
-        Text = $"{(view.HasCountdown ? "LOCATE" : "OUT OF SERVICE")} — {view.DisplayName}";
+        Text = $"{(view.DismissOnKey ? "LOCATE" : view.ShowBypassChip ? "OUT OF SERVICE" : "SYSTEM UPDATES")} — {view.DisplayName}";
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         Bounds = SystemInformation.VirtualScreen;    // span every monitor on the box
@@ -70,9 +87,10 @@ internal sealed class OverlayForm : System.Windows.Forms.Form
         DoubleBuffered = true;
         KeyPreview = true;
         // locate: ESC dismisses. downed: B (or ESC) is the staff bypass — never a timed close.
-        KeyDown += (_, e) => { if (e.KeyCode == System.Windows.Forms.Keys.Escape || (!view.HasCountdown && e.KeyCode == System.Windows.Forms.Keys.B)) Close(); };
-        // locate: any click dismisses. downed: sticky — only the BYPASS chip does.
-        MouseDown += (_, e) => { if (view.HasCountdown || _bypassRect.Contains(e.Location)) Close(); };
+        // update (T33): nothing dismisses it — DismissOnKey/ShowBypassChip are both false.
+        KeyDown += (_, e) => { if (view.DismissOnKey && e.KeyCode == System.Windows.Forms.Keys.Escape || (view.ShowBypassChip && e.KeyCode == System.Windows.Forms.Keys.B)) Close(); };
+        // locate: any click dismisses. downed: sticky — only the BYPASS chip does. update: never.
+        MouseDown += (_, e) => { if (view.DismissOnKey || (view.ShowBypassChip && _bypassRect.Contains(e.Location))) Close(); };
             Shown += (_, _) =>
             {
                 BringToFront();
@@ -210,7 +228,7 @@ internal sealed class OverlayForm : System.Windows.Forms.Form
                 cf.Dispose();
                 DrawRight(g, "auto-dismiss", Math.Max(10, L.CountSize * 0.55f), FontStyle.Regular, Muted, w - 36 * L.Scale, 28 * L.Scale + secSz.Height);
             }
-            else
+            else if (_view.ShowBypassChip)
             {
                 const string chip = "BYPASS  (B)";
                 var chipSz = g.MeasureString(chip, cf);
@@ -225,6 +243,12 @@ internal sealed class OverlayForm : System.Windows.Forms.Form
                 g.DrawString(chip, cf, chipAcc, _bypassRect.X + 14 * L.Scale, _bypassRect.Y + 6 * L.Scale);
                 cf.Dispose();
                 DrawRight(g, "no expiry — stays until bypass or operator clears", Math.Max(10, L.CountSize * 0.55f), FontStyle.Regular, Muted, w - 36 * L.Scale, _bypassRect.Y - L.CountSize * 0.8f);
+            }
+            else
+            {
+                // update overlay (T33): no chip, no keys — the install owns this screen.
+                DrawRight(g, "do not power off — updates finish on their own", Math.Max(10, L.CountSize * 0.55f), FontStyle.Regular, Muted, w - 36 * L.Scale, L.HintY - L.CountSize * 1.6f);
+                cf.Dispose();
             }
             DrawCentered(g, _view.DismissHint, L.HintSize, FontStyle.Regular, Muted, L.HintY, w / 2);
         }

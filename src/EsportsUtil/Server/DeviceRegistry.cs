@@ -22,6 +22,15 @@ public sealed class RegistryEntry
     public string? WuStatus { get; set; }        // ok | updates | error | unsupported
     public int? WuPending { get; set; }
     public long? WuScanUnix { get; set; }
+    // In-flight/last Windows Update INSTALL run (T33, machine_state.windowsUpdate.install_*).
+    public string? WuInstallState { get; set; }   // running | done | failed (null = never installed)
+    public int? WuInstallDone { get; set; }
+    public int? WuInstallTotal { get; set; }
+    public string? WuInstallError { get; set; }
+    public bool WuRebootPending { get; set; }     // WUA demanded a reboot (agent armed one)
+    // T33 bookkeeping: the install request auto-downed this station, so the terminal install
+    // transition restores active. An operator-owned down never sets this and is never touched.
+    public bool WuAutoDowned { get; set; }
     // Wallpaper drift verdict from an agent report (machine_state.wallpaperSync): true only when an
     // enforced target exists AND the desktop's wallpaper file no longer hashes to it.
     public bool WpDrift { get; set; }
@@ -148,16 +157,62 @@ public sealed class DeviceRegistry
         }
     }
 
-    /// <summary>Store the latest Windows Update summary from an accepted report (a null summary
-    /// clears stale values when an older agent re-reports without the section).</summary>
-    public void SetUpdateState(string clientId, string? status, int? pending, long? scanUnix)
+    /// <summary>Store the latest Windows Update summary + install run from an accepted report (a null
+    /// summary clears stale values when an older agent re-reports without the section). Returns the
+    /// install transition this ingest caused (T33): "done" | "failed" | "aborted" when a previously
+    /// running install reaches a terminal state (or vanishes — agent died mid-install), else null.</summary>
+    public string? SetUpdateState(string clientId, string? status, int? pending, long? scanUnix,
+        string? installState = null, int? installDone = null, int? installTotal = null,
+        string? installError = null, bool rebootPending = false)
     {
         lock (_gate)
         {
-            if (!_devices.TryGetValue(clientId, out var e)) return;
-            if (e.WuStatus == status && e.WuPending == pending && e.WuScanUnix == scanUnix) return;
+            if (!_devices.TryGetValue(clientId, out var e)) return null;
+            string? transition = e.WuInstallState == "running"
+                ? (installState is "done" or "failed" ? installState : "aborted")
+                : null;
+            if (e.WuStatus == status && e.WuPending == pending && e.WuScanUnix == scanUnix &&
+                e.WuInstallState == installState && e.WuInstallDone == installDone && e.WuInstallTotal == installTotal &&
+                e.WuInstallError == installError && e.WuRebootPending == rebootPending) return transition;
             e.WuStatus = status; e.WuPending = pending; e.WuScanUnix = scanUnix;
+            e.WuInstallState = installState; e.WuInstallDone = installDone; e.WuInstallTotal = installTotal;
+            e.WuInstallError = installError; e.WuRebootPending = rebootPending;
             Save();
+            return transition;
+        }
+    }
+
+    /// <summary>T33: an install request parks the station out of service while updates run — but ONLY
+    /// if it's currently active (an operator-owned down is left exactly as-is). Returns true when this
+    /// call auto-downed the device, which arms the terminal-state restore in SetUpdateState's caller.</summary>
+    public bool AutoDownForUpdateInstall(string clientId, string reason)
+    {
+        lock (_gate)
+        {
+            if (!_devices.TryGetValue(clientId, out var e)) return false;
+            if (e.DesiredState != "active") return false;
+            e.DesiredState = "downed";
+            e.DownedContentId = null;
+            e.DownedReason = reason;
+            e.WuAutoDowned = true;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>T33: install ended — restore the auto-downed station to active and clear the flag.
+    /// A no-op unless this down was the install's own (WuAutoDowned), so operator-owned downs survive.</summary>
+    public bool FinishAutoDownAfterInstall(string clientId)
+    {
+        lock (_gate)
+        {
+            if (!_devices.TryGetValue(clientId, out var e) || !e.WuAutoDowned) return false;
+            e.WuAutoDowned = false;
+            e.DesiredState = "active";
+            e.DownedContentId = null;
+            e.DownedReason = null;
+            Save();
+            return true;
         }
     }
 

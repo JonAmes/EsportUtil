@@ -180,7 +180,7 @@ async function tick(){
     row('client_id','<span class="mono">'+esc(s.client_id||'—')+'</span>')+
     row('Pairing',paired?'<span class="pill ok">'+esc(s.display_name)+'</span>':'<span class="pill info">awaiting pairing</span>')+
     row('Desired state',dn?'<span class="pill warn">downed</span>':'<span class="pill ok">active</span>')+
-    (s.windows_update&&s.windows_update.pending_count>0?row('Windows updates','<span class="pill yel">'+s.windows_update.pending_count+' update'+(s.windows_update.pending_count===1?'':'s')+' pending</span>'):'')+
+    (s.windows_update?(s.windows_update.install_state==='running'?row('Windows updates','<span class="pill yel">installing '+(s.windows_update.install_done||0)+'/'+(s.windows_update.install_total||0)+' — do not power off</span>'):s.windows_update.pending_count>0?row('Windows updates','<span class="pill yel">'+s.windows_update.pending_count+' update'+(s.windows_update.pending_count===1?'':'s')+' pending</span>'):''):'')+
     (s.wallpaper_sync&&s.wallpaper_sync.drift?row('Wallpaper','<span class="pill yel">out of sync — venue image re-applying</span>'):'')+
     row('Last report','<span class="mono">'+(s.last_report_at?new Date(s.last_report_at).toLocaleTimeString():'—')+' · '+s.reports_sent+' sent</span>');
   $('hashchip').textContent=s.report_hash?'manifest '+s.report_hash.slice(0,8):'';

@@ -784,7 +784,8 @@ var agCfg5 = new EsportsConfig { Role = "agent", ServerUrl = srvUrl5, DataDir = 
 agCfg5.HeartbeatIntervalSec = 1; agCfg5.SlowScanIntervalMin = 0; agCfg5.UpdateScanIntervalMin = 0;   // timer driven explicitly below
 agCfg5.ScanDirs = new List<string> { rootA };
 using var cts5 = new CancellationTokenSource();
-var loopTask5 = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }, agCfg5).RunAsync(cts5.Token);
+var loop5 = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }, agCfg5);
+var loopTask5 = loop5.RunAsync(cts5.Token);
 string cid5 = "";
 await Until(async () => { cid5 = (await State5()).devices.FirstOrDefault()?.client_id ?? ""; return cid5.Length > 0; }, 20);
 async Task<JsonDoc> State5() => Wire.FromJson<JsonDoc>(await probe5.GetStringAsync("/api/state"))!;
@@ -1097,6 +1098,87 @@ Check(dashHtmlLate.Contains("pushAppUpdate") && dashHtmlLate.Contains("up_to_dat
         "T32b dashboard ships the installed-apps browser: 'N apps' chip opens a filterable modal fed by the projected installed_apps field");
 }
 
+// ---------- T33: one-click "install ALL Windows updates" per station ----------
+// (user: "Updates button doesn't do anything. Lets have it run all updates for that unit.")
+// Pure gating + cross-OS fake install seam first.
+Check(!UpdateWatch.DueInstall(false, false, false) && UpdateWatch.DueInstall(false, false, true)
+    && !UpdateWatch.DueInstall(false, true, true) && !UpdateWatch.DueInstall(true, false, true),
+    "T33a DueInstall(): fires only with an install requested and no scan/install already in flight");
+var t33Beats = new List<string>();
+UpdateWatch.Reset();
+Environment.SetEnvironmentVariable(UpdateWatch.FakeEnvVar, "3");
+Environment.SetEnvironmentVariable(UpdateWatch.FakeInstallEnvVar, "20");
+Environment.SetEnvironmentVariable(UpdateWatch.FakeRebootEnvVar, "1");
+UpdateWatch.RequestInstall();
+await UpdateWatch.InstallAsync(() => t33Beats.Add($"{UpdateWatch.Last!.InstallState}:{UpdateWatch.Last!.InstallDone}"));
+Check(UpdateWatch.Last is { InstallState: "done", InstallDone: 3, InstallTotal: 3, RebootPending: true }
+    && t33Beats.Contains("running:1") && t33Beats.Contains("running:2") && t33Beats.Count >= 4,
+    "T33b fake install seam: running 1/3..3/3 stage beats then done 3/3 carrying the reboot verdict (fake WUA flag)");
+var t33Ms = StateModule.Record();
+Check(t33Ms["windowsUpdate"]?["install_state"]?.GetValue<string>() == "done"
+    && t33Ms["windowsUpdate"]!["install_total"]?.GetValue<int>() == 3
+    && t33Ms["windowsUpdate"]!["reboot_pending"]?.GetValue<bool>() == true,
+    "T33c State Module embeds the install verdict into machine_state.windowsUpdate for the report");
+// a timer scan landing mid-install must NOT erase the progress the dashboard is rendering
+UpdateWatch.Reset();
+Environment.SetEnvironmentVariable(UpdateWatch.FakeEnvVar, "2");
+Environment.SetEnvironmentVariable(UpdateWatch.FakeInstallEnvVar, "300");
+Environment.SetEnvironmentVariable(UpdateWatch.FakeRebootEnvVar, null);
+var t33InstallTask = UpdateWatch.InstallAsync();
+await Task.Delay(80);
+await UpdateWatch.ScanAsync();
+var t33Keep = UpdateWatch.Last!.InstallState == "running" && UpdateWatch.Last!.InstallTotal == 2;
+await t33InstallTask;
+Check(t33Keep && UpdateWatch.Last!.InstallState == "done" && !UpdateWatch.IsInstalling,
+    "T33d MergeInstall: a scan during the install keeps running done/total visible; the run still finishes");
+// update overlay: pure argv channel, no-dismiss contract, file-based progress
+var t33Ov = new UpdateOverlayRequest("Jon MSI", "4821", "cid-t33", "Dell XPS 15", Path.Combine(tmp, "t33-progress.json"));
+Check(UpdateOverlayRequest.TryParse(UpdateOverlayRequest.BuildArgs(t33Ov), out var t33Back) && t33Back == t33Ov
+    && !t33Ov.DismissOnKey && !t33Ov.ShowBypassChip && !t33Ov.HasCountdown,
+    "T33e update overlay argv round-trips to the same-EXE child; nothing on the machine dismisses it (agent owns its lifetime)");
+UpdateOverlayRequest.WriteProgress(t33Ov.ProgressFile, "running", 2, 4, false);
+var t33Prog = UpdateOverlayRequest.ReadProgress(t33Ov.ProgressFile);
+Check(t33Prog is { State: "running", Done: 2, Total: 4 }
+    && UpdateOverlayRequest.ProgressLine(t33Prog).Contains("2 of 4")
+    && ConsoleOverlay.RenderUpdateCard(t33Ov).Contains("SYSTEM UPDATES"),
+    "T33f progress channel: agent writes every stage, renderer re-reads each frame (never stdin/IPC)");
+// live cycle: the T25 pair was stopped after T27, so re-start it — server registry AND the agent
+// identity live on disk in their data dirs, so cid5 is still the same registered device.
+using var app5b = ServerRole.BuildApp(srvCfg5); await app5b.StartAsync();
+using var cts6 = new CancellationTokenSource();
+var loop6 = new AgentLoop(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }, agCfg5);
+var loopTask6 = loop6.RunAsync(cts6.Token);
+loop6.DownOverlaySurface = _ => new DownProbe();
+loop6.UpdateOverlaySurface = _ => new DownProbe();
+var t33Empty = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+var t33Nope = await probe5.PostAsync("/api/install-updates/nope", t33Empty);
+Environment.SetEnvironmentVariable(UpdateWatch.FakeEnvVar, "4");
+Environment.SetEnvironmentVariable(UpdateWatch.FakeInstallEnvVar, "25");
+var t33Req = await probe5.PostAsync($"/api/install-updates/{cid5}", t33Empty);
+Check((int)t33Nope.StatusCode == 404 && (int)t33Req.StatusCode == 200
+    && await Until(async () => (await State5()).devices.First(x => x.client_id == cid5).desired_state == "downed", 10),
+    "T33g /api/install-updates: unknown device 404; a live active station is auto-marked downed the moment the install is requested");
+Check(await Until(async () => { var d = (await State5()).devices.First(x => x.client_id == cid5); return d.wu_install_state == "done" && d.wu_install_total == 4; }, 20),
+    "T33h full cycle: install_updates directive → agent installs all 4 faked updates → done 4/4 streams to /api/state");
+Check(await Until(async () => (await State5()).devices.First(x => x.client_id == cid5).desired_state == "active", 10),
+    "T33i terminal install transition restores the auto-downed station to active (operator-owned downs would be untouched)");
+var t33Alerts = (await State5()).alerts;
+Check(t33Alerts.Any(a => a.type == "update_install_requested") && t33Alerts.Any(a => a.type == "update_install_done"),
+    "T33j install request and completion raise operator alerts on the dashboard feed");
+Environment.SetEnvironmentVariable(UpdateWatch.FakeEnvVar, null);
+Environment.SetEnvironmentVariable(UpdateWatch.FakeInstallEnvVar, null);
+UpdateWatch.Reset();
+// dashboard + client view wiring
+var t33Dash = await probe5.GetStringAsync("/");
+Check(t33Dash.Contains("installUpdates(") && t33Dash.Contains("/api/install-updates/") && t33Dash.Contains("wu_install_state")
+    && t33Dash.Contains("scanUpdates("),
+    "T33k dashboard: 'updates' button POSTs install-updates (confirm-gated) and streams done/total; a separate re-scan keeps the poll-only path");
+var t33Client = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..",
+    "EsportsUtil", "wwwroot", "client.html")));
+Check(t33Client.Contains("install_state==='running'"),
+    "T33l client view shows 'installing X/Y — do not power off' while a T33 install runs on the machine");
+cts6.Cancel(); await loopTask6; await app5b.StopAsync();
+
 
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
@@ -1134,7 +1216,7 @@ static bool Throws<T>(Action a) where T : Exception
 
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
-file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null, bool wallpaper_drift = false, List<AppDoc>? apps = null, List<InstAppDoc>? installed_apps = null);
+file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null, bool wallpaper_drift = false, List<AppDoc>? apps = null, List<InstAppDoc>? installed_apps = null, string? desired_state = null, string? wu_install_state = null, int? wu_install_total = null);
 file sealed record AppDoc(string app_id, bool installed, string? version, bool? up_to_date, long checked_unix);
 file sealed record InstAppDoc(string name, string? publisher, string? version, string hive, string view);
 

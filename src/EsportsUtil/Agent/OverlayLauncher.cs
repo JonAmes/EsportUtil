@@ -90,7 +90,7 @@ public static class DownOverlayLauncher
         }
     }
 
-    private sealed class ProcessHandle : IDownOverlayHandle
+    internal sealed class ProcessHandle : IDownOverlayHandle
     {
         private readonly Process _p;
         public ProcessHandle(Process p) => _p = p;
@@ -100,6 +100,30 @@ public static class DownOverlayLauncher
             try { if (!_p.HasExited) _p.Kill(entireProcessTree: true); }
             catch (InvalidOperationException) { }           // already exited between check and kill
             finally { _p.Dispose(); }
+        }
+    }
+}
+
+/// <summary>Supervised spawn for the T33 update overlay: same same-EXE child pattern, handle
+/// returned so the agent loop can kill it when the install reaches a terminal state. Nothing on
+/// the machine can dismiss this one — its lifetime belongs entirely to the install.</summary>
+public static class UpdateOverlayLauncher
+{
+    public static IDownOverlayHandle? Launch(UpdateOverlayRequest req)
+    {
+        try
+        {
+            var psi = OverlayLauncher.OverlayStart();
+            foreach (var a in UpdateOverlayRequest.BuildArgs(req)) psi.ArgumentList.Add(a);
+            var p = Process.Start(psi);
+            if (p is null) return null;
+            OverlayLauncher.DrainPipes(p);
+            return new DownOverlayLauncher.ProcessHandle(p);
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Console.WriteLine($"update overlay spawn failed: {e.Message}");
+            return null;
         }
     }
 }

@@ -12,6 +12,8 @@ public interface IOverlayView
     string Kicker { get; }                 // letter-spaced accent heading
     string DismissHint { get; }            // bottom-center note
     bool HasCountdown { get; }             // false = no expiry (downed): show a BYPASS chip instead
+    bool ShowBypassChip => !HasCountdown;  // update overlay: nothing dismisses an install
+    bool DismissOnKey => HasCountdown;     // ESC closes locate; downed has its own B-chord; updates: no key
     string AccentHex { get; }              // same style, each state keeps its own palette token
     string MetaLine();
     List<(string Text, bool Strong)> MetaRuns();
@@ -156,6 +158,123 @@ public sealed record DownedOverlayRequest(string DisplayName, string DevicePin, 
     }
 
     /// <summary>QR payload identical to the printed label — staff can scan a downed station too.</summary>
+    public string QrPayload() => FileLabelPrinter.QrPayload(ClientId, DevicePin);
+}
+
+/// <summary>Update overlay (T33) — full-screen "System Updates In Progress" card (blue accent per
+/// mockups/system_updates_overlay.html) shown while the agent installs every pending Windows update.
+/// Nothing dismisses it (no key, no click, no bypass chip): the agent kills the child when the
+/// install reaches a terminal state. Progress is pulled, not pushed — the agent writes
+/// update-progress.json into its data dir at every stage and the renderer re-reads it each frame,
+/// so a long install never touches the child's stdin or lifecycle. MetaLine draws the live
+/// done/total text bar; it's the only per-frame-volatile text, keeping the layout stable.</summary>
+public sealed record UpdateOverlayRequest(string DisplayName, string DevicePin, string ClientId, string? Model, string ProgressFile) : IOverlayView
+{
+    public const string Flag = "--update-overlay";
+
+    public string Kicker => "SYSTEM UPDATES IN PROGRESS";
+    public string DismissHint => "do not power off this machine — updates finish on their own";
+    public bool HasCountdown => false;
+    public bool ShowBypassChip => false;
+    public bool DismissOnKey => false;
+    public string AccentHex => "#007bff";                     // mockup update blue
+    public bool ShouldShow(long nowUnix) => true;
+    public int SecondsLeft(long nowUnix) => 0;
+
+    public static string ProgressPathFor(string dataDir) => Path.Combine(dataDir, "update-progress.json");
+
+    public static List<string> BuildArgs(UpdateOverlayRequest req) =>
+    [
+        Flag,
+        "--display-name", req.DisplayName,
+        "--pin", req.DevicePin,
+        "--client-id", req.ClientId,
+        "--model", req.Model ?? "",
+        "--progress-file", req.ProgressFile,
+    ];
+
+    public static bool TryParse(IReadOnlyList<string> a, out UpdateOverlayRequest req)
+    {
+        req = null!;
+        string? name = null, pin = null, cid = null, model = null, prog = null;
+        for (int i = 0; i < a.Count; i++)
+            switch (a[i])
+            {
+                case "--display-name" when i + 1 < a.Count: name = a[++i]; break;
+                case "--pin" when i + 1 < a.Count: pin = a[++i]; break;
+                case "--client-id" when i + 1 < a.Count: cid = a[++i]; break;
+                case "--model" when i + 1 < a.Count: model = a[++i]; break;
+                case "--progress-file" when i + 1 < a.Count: prog = a[++i]; break;
+            }
+        if (name is null || pin is null || cid is null || prog is null) return false;
+        req = new UpdateOverlayRequest(name, pin, cid,
+            string.IsNullOrEmpty(model) ? null : model, prog);
+        return true;
+    }
+
+    // ---- progress channel (agent writes, renderer reads) ------------------------------------
+    public sealed record Progress(string State, int Done, int Total, bool RebootPending);
+
+    public static void WriteProgress(string path, string state, int done, int total, bool rebootPending)
+    {
+        try
+        {
+            var node = new System.Text.Json.Nodes.JsonObject
+            {
+                ["state"] = state, ["done"] = done, ["total"] = total, ["reboot_pending"] = rebootPending,
+            };
+            File.WriteAllText(path, node.ToJsonString());
+        }
+        catch (IOException) { /* renderer just keeps the last frame */ }
+    }
+
+    public static Progress? ReadProgress(string path)
+    {
+        try
+        {
+            var o = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path)) as System.Text.Json.Nodes.JsonObject;
+            if (o?["state"]?.GetValue<string>() is not { Length: > 0 } s) return null;
+            return new Progress(s, o["done"]?.GetValue<int>() ?? 0, o["total"]?.GetValue<int>() ?? 0,
+                o["reboot_pending"]?.GetValue<bool>() ?? false);
+        }
+        catch { return null; }   // missing/mid-write: frame falls back to "starting"
+    }
+
+    /// <summary>One-line progress text, shared by WinForms and console renderers (pure).</summary>
+    public static string ProgressLine(Progress? p) => p switch
+    {
+        null => "starting update install\u2026",
+        { State: "running" } => $"installing update {p.Done} of {p.Total}  {Bar(p.Done, p.Total)}",
+        { State: "done" } => p.RebootPending
+            ? $"all {p.Total} update{(p.Total == 1 ? "" : "s")} installed \u00b7 rebooting shortly"
+            : $"all {p.Total} update{(p.Total == 1 ? "" : "s")} installed \u00b7 returning to service",
+        { State: "failed" } => "update install failed \u00b7 see the dashboard",
+        _ => p.State,
+    };
+
+    public static string Bar(int done, int total, int width = 18)
+    {
+        if (total <= 0) return new string('\u2591', width);
+        int fill = Math.Clamp(done * width / total, 0, width);
+        return new string('\u2588', fill) + new string('\u2591', width - fill);
+    }
+
+    public string MetaLine()
+    {
+        var base_ = $"PIN {DevicePin} \u00b7 {(Model is null ? "model unknown" : Model)} \u00b7 client {ClientId[..Math.Min(8, ClientId.Length)]}";
+        return $"{base_} \u00b7 {ProgressLine(ReadProgress(ProgressFile))}";
+    }
+
+    public List<(string Text, bool Strong)> MetaRuns()
+    {
+        var runs = new List<(string, bool)> { ("PIN ", false), (DevicePin, true) };
+        runs.Add((" \u00b7 ", false));
+        runs.Add((Model is null ? "model unknown" : Model, true));
+        runs.Add(($" \u00b7 client {ClientId[..Math.Min(8, ClientId.Length)]} \u00b7 ", false));
+        runs.Add((ProgressLine(ReadProgress(ProgressFile)), true));
+        return runs;
+    }
+
     public string QrPayload() => FileLabelPrinter.QrPayload(ClientId, DevicePin);
 }
 
@@ -354,5 +473,60 @@ public static class ConsoleOverlay
             Console.WriteLine(RenderDownCard(req));
             if (await Task.WhenAny(dismiss, Task.Delay(1000, CancellationToken.None)) == dismiss) break;
         }
+    }
+
+    // --- update overlay variant (T33): nothing dismisses it; exits when progress goes terminal --
+    public static string RenderUpdateCard(UpdateOverlayRequest req)
+    {
+        const int inner = 52;
+        var qr = Qr.Modules(req.QrPayload());
+        string Row(string text) => $"┃{text,-inner}┃";
+        var sb = new StringBuilder();
+        sb.Append("┏").Append(new string('━', inner)).AppendLine("┓");
+        sb.AppendLine(Row(" SYSTEM UPDATES IN PROGRESS"));
+        sb.AppendLine(Row($" {req.DisplayName}"));
+        foreach (var l in Wrap(req.MetaLine(), inner)) sb.AppendLine(Row(" " + l));
+        sb.AppendLine(Row(" do not power off this machine"));
+        sb.AppendLine("┣" + new string('─', inner) + "┫");
+        for (int y = 0; y + 1 < qr.Length; y += 2)
+        {
+            sb.Append("┃  ");
+            for (int x = 0; x < qr[0].Length; x++)
+            {
+                bool top = qr[y][x], bot = qr[y + 1][x];
+                sb.Append(top && bot ? '█' : top ? '▀' : bot ? '▄' : ' ');
+            }
+            sb.AppendLine();
+        }
+        sb.AppendLine("┗" + new string('─', inner) + "┛");
+        sb.AppendLine($"scan QR payload: {req.QrPayload()}");
+        return sb.ToString();
+    }
+
+    public static async Task RunUpdateAsync(UpdateOverlayRequest req, CancellationToken ct)
+    {
+        // No stdin dismiss at all (an install must not be interrupted) — the agent kills this child
+        // on the terminal state; a terminal progress file is the self-exit backstop.
+        while (!ct.IsCancellationRequested)
+        {
+            Console.Clear();
+            Console.WriteLine(RenderUpdateCard(req));
+            var p = UpdateOverlayRequest.ReadProgress(req.ProgressFile);
+            if (p is { State: "done" or "failed" }) break;
+            try { await Task.Delay(1000, ct); } catch (OperationCanceledException) { break; }
+        }
+    }
+
+    private static List<string> Wrap(string text, int inner)
+    {
+        var lines = new List<string>();
+        var cur = "";
+        foreach (var word in text.Split(' '))
+        {
+            if (cur.Length + word.Length + 1 > inner - 1 && cur.Length > 0) { lines.Add(cur); cur = word; }
+            else cur = cur.Length == 0 ? word : cur + " " + word;
+        }
+        if (cur.Length > 0) lines.Add(cur);
+        return lines;
     }
 }

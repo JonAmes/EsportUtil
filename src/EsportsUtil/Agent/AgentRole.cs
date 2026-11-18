@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using EsportsUtil.Core;
 
@@ -145,6 +146,12 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
     public string? LastDownedReason { get; private set; }
     private IDownOverlayHandle? _downOverlay;
     private bool _downOverlayDismissed;
+
+    /// <summary>Update overlay seam (T33): same supervised-child pattern; the install owns its whole
+    /// lifetime — killed on the terminal install state, never dismissable on the machine.</summary>
+    public Func<UpdateOverlayRequest, IDownOverlayHandle?> UpdateOverlaySurface { get; set; } = req => UpdateOverlayLauncher.Launch(req);
+    private IDownOverlayHandle? _updateOverlay;
+    private bool _rebootArmed;       // Windows gate: reboot armed exactly once per install
     private string? _lastHash;
     private string? _wallpaperKey;   // desired wallpaper currently applied: content_id while downed, "venue@<sha>" for the venue upload
     private bool _forceSelfUpdate;   // self_update directive (T30): check GitHub on this beat
@@ -227,6 +234,11 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                                     UpdateWatch.RequestScan();
                                     Console.WriteLine("scan_updates directive → Windows Update poll requested");
                                 }
+                                else if (d.Type == "install_updates")
+                                {
+                                    UpdateWatch.RequestInstall();
+                                    Console.WriteLine("install_updates directive → full Windows Update install requested (overlay up, station held downed)");
+                                }
                                 else if (d.Type == "self_update")
                                     _forceSelfUpdate = true;   // operator pushed "app update" — poll GitHub now
                                 else if (d.Type == "sync_wallpaper")
@@ -250,6 +262,54 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                                 Console.WriteLine($"windows-update poll → {wu?.Status}{pend}");
                                 _reportNow = DateTime.UtcNow;
                             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+                        // Windows Update INSTALL (T33, operator directive only): full-screen overlay spans
+                        // the install, every stage writes update-progress.json (renderer re-reads it) AND
+                        // forces a prompt report so the dashboard chip streams done/total. On the terminal
+                        // state the agent kills the overlay; a reboot happens ONLY if WUA demands one.
+                        if (UpdateWatch.DueInstall(UpdateWatch.IsScanning, UpdateWatch.IsInstalling, UpdateWatch.HasRequestedInstall))
+                        {
+                            var progPath = UpdateOverlayRequest.ProgressPathFor(cfg.DataDir);
+                            if (_updateOverlay is not { Alive: true })
+                            {
+                                var name = string.IsNullOrWhiteSpace(ack.DisplayName) ? $"PC {id.DevicePin}" : ack.DisplayName;
+                                _updateOverlay = UpdateOverlaySurface(new UpdateOverlayRequest(name, id.DevicePin, id.ClientId, model, progPath));
+                                UpdateOverlayRequest.WriteProgress(progPath, "running", 0, UpdateWatch.Last?.PendingCount ?? 0, false);
+                            }
+                            _ = UpdateWatch.InstallAsync(
+                                () =>
+                                {
+                                    var wu = UpdateWatch.Last;
+                                    UpdateOverlayRequest.WriteProgress(progPath, wu?.InstallState ?? "running",
+                                        wu?.InstallDone ?? 0, wu?.InstallTotal ?? 0, wu?.RebootPending ?? false);
+                                    _reportNow = DateTime.UtcNow;
+                                }, ct).ContinueWith(_ =>
+                                {
+                                    var wu = UpdateWatch.Last;
+                                    _reportNow = DateTime.UtcNow;
+                                    if (wu?.InstallState is "done" or "failed")
+                                    {
+                                        _updateOverlay?.Kill();
+                                        _updateOverlay = null;
+                                        Console.WriteLine($"windows-update install {wu.InstallState}: {wu.InstallDone}/{wu.InstallTotal}" +
+                                            (wu.InstallError is { Length: > 0 } err ? $" — {err}" : ""));
+                                        // Operator decision: auto-reboot ONLY when WUA says a reboot is required.
+                                        // 75 s grace so the terminal report lands on the dashboard before the box reboots.
+                                        if (wu.InstallState == "done" && wu.RebootPending == true &&
+                                            OperatingSystem.IsWindows() && !_rebootArmed)
+                                        {
+                                            _rebootArmed = true;
+                                            Console.WriteLine("WUA verdict: reboot required — arming shutdown /r /t 75");
+                                            try
+                                            {
+                                                Process.Start(new ProcessStartInfo("shutdown",
+                                                    "/r /t 75 /c \"EsportsUtil: Windows Update install complete — reboot required\"")
+                                                { UseShellExecute = false });
+                                            }
+                                            catch (Exception e2) { Console.WriteLine($"reboot arm failed: {e2.Message}"); }
+                                        }
+                                    }
+                                }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+                        }
                         // Wallpaper drift: the desktop can move off the enforced image after we apply
                         // it (user changes wallpaper, applied file tampered). Evaluate every beat;
                         // a drift flip forces a prompt report so the dashboard sync pill appears
@@ -366,6 +426,9 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
     {
         if (ack.DesiredState == "downed")
         {
+            // An in-flight update install owns the screen — one card at a time; the install overlay
+            // (which also holds the station downed server-side) outranks the plain downed card.
+            if (_updateOverlay is { Alive: true }) return;
             if (_downOverlay is { } h)
             {
                 if (!h.Alive)

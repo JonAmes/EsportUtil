@@ -120,10 +120,33 @@ public static class ServerRole
             if (report.MachineState is JsonObject ms)
             {
                 var wu = ms["windowsUpdate"] as JsonObject;   // null = never polled — clears stale values
-                registry.SetUpdateState(report.ClientId,
+                var wuTr = registry.SetUpdateState(report.ClientId,
                     wu?["status"]?.GetValue<string>(),
                     wu?["pending_count"]?.GetValue<int?>(),
-                    wu?["last_scan_unix"]?.GetValue<long?>());
+                    wu?["last_scan_unix"]?.GetValue<long?>(),
+                    wu?["install_state"]?.GetValue<string>(),
+                    wu?["install_done"]?.GetValue<int?>(),
+                    wu?["install_total"]?.GetValue<int?>(),
+                    wu?["install_error"]?.GetValue<string>(),
+                    wu?["reboot_pending"]?.GetValue<bool>() ?? false);
+                if (wuTr is not null)   // T33: an install run just ended (or died) — alert + restore auto-down
+                {
+                    var dev = registry.Snapshot().FirstOrDefault(x => x.ClientId == report.ClientId);
+                    var who = string.IsNullOrWhiteSpace(dev?.DisplayName) ? $"PIN {dev?.DevicePin}" : dev!.DisplayName;
+                    registry.FinishAutoDownAfterInstall(report.ClientId);
+                    _ = hub.PublishAsync(new Alert(
+                        wuTr == "done" ? "update_install_done" : "update_install_failed",
+                        wuTr == "done" ? "info" : "warn",
+                        wuTr switch
+                        {
+                            "done" => $"{who}: {dev?.WuInstallTotal} update(s) installed" +
+                                     (dev?.WuRebootPending == true ? " · rebooting (required by Windows Update)" : " · back in service"),
+                            "failed" => $"{who}: install failed after {dev?.WuInstallDone}/{dev?.WuInstallTotal}" +
+                                       (dev?.WuInstallError is { Length: > 0 } err ? $" — {err}" : ""),
+                            _ => $"{who}: update install interrupted (agent lost mid-install) — station returned to service",
+                        },
+                        report.ClientId, null, DateTimeOffset.UtcNow));
+                }
                 var ws = ms["wallpaperSync"] as JsonObject;   // null = nothing enforced — clears stale drift
                 registry.SetWallpaperState(report.ClientId,
                     ws?["drift"]?.GetValue<bool>() ?? false,
@@ -201,6 +224,26 @@ public static class ServerRole
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 300))
                 ? Results.Json(new AckEnvelope(true), Wire.Options)
                 : Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404));
+
+        // T33: the dashboard "Updates" button, for real (user: "Updates button doesn't do anything.
+        // Lets have it run all updates for that unit."). One-shot install_updates directive (TTL 5 min,
+        // like its siblings) PLUS an auto-down so the seat leaves service while updates install —
+        // only if the station is currently active; an operator-owned down is never touched. The
+        // terminal install transition in the report ingest restores active and alerts.
+        app.MapPost("/api/install-updates/{clientId}", (string clientId) =>
+        {
+            if (!registry.QueueDirective(clientId, new Directive("install_updates", null,
+                    DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 300)))
+                return Results.Json(new AckEnvelope(false, "unknown device"), Wire.Options, statusCode: 404);
+            var auto = registry.AutoDownForUpdateInstall(clientId, "Windows Update install running");
+            var e = registry.Snapshot().FirstOrDefault(x => x.ClientId == clientId);
+            var who = string.IsNullOrWhiteSpace(e?.DisplayName) ? $"PIN {e?.DevicePin}" : e!.DisplayName;
+            _ = hub.PublishAsync(new Alert("update_install_requested", "info",
+                $"{who}: full Windows Update install requested — " +
+                (auto ? "station held down while updates install" : "station already downed by operator"),
+                clientId, null, DateTimeOffset.UtcNow));
+            return Results.Json(new AckEnvelope(true), Wire.Options);
+        });
 
         // Operator-requested self-update check+apply (T30): one-shot self_update directive (TTL 5 min).
         app.MapPost("/api/self-update/{clientId}", (string clientId) =>
@@ -476,6 +519,10 @@ public static class ServerRole
                     wu_status = e.WuStatus,
                     wu_pending = e.WuPending,
                     wu_scan_min_ago = e.WuScanUnix is null ? (double?)null : Math.Round((now.ToUnixTimeSeconds() - e.WuScanUnix.Value) / 60.0, 1),
+                    wu_install_state = e.WuInstallState,
+                    wu_install_done = e.WuInstallDone,
+                    wu_install_total = e.WuInstallTotal,
+                    wu_reboot_pending = e.WuRebootPending ? true : (bool?)null,
                     wallpaper_drift = e.WpDrift,
                     apps = e.AppsJson is null ? null : JsonNode.Parse(e.AppsJson),
                     installed_apps = e.InstalledAppsJson is null ? null : CompactApps(e.InstalledAppsJson),

@@ -268,6 +268,8 @@ async function toggleDown(cid, on){
 }
 async function locate(cid){ await api('/api/locate/'+cid, {}); refresh(); }
 async function scanUpdates(cid){ await api('/api/scan-updates/'+cid, {}); refresh(); }
+// T33: the "updates" button installs, not just polls (user: "run all updates for that unit").
+async function installUpdates(cid){ if(!confirm('Install ALL pending Windows updates on this station now?\n\nThe PC shows a full-screen update overlay and the station is held OFFLINE until the install finishes. It reboots only if Windows Update requires it.')) return; const r = await api('/api/install-updates/'+cid, {}); if(r && r.ok===false) alert(r.error||'unknown device'); refresh(); }
 async function selfUpdate(cid){ const r = await api('/api/self-update/'+cid, {}); if(r && r.ok===false) alert(r.error||'unknown device'); refresh(); }
 async function syncWallpaper(cid){ await api('/api/sync-wallpaper/'+cid, {}); refresh(); }
 
@@ -386,6 +388,8 @@ async function refresh(){
     const hbC = !dev.online ? 'var(--bad)' : ago > 60 ? 'var(--warn)' : 'var(--ok)';
     const dn = dev.desired_state === 'downed';
     const up = (dev.wu_pending || 0) > 0;
+    const inst = dev.wu_install_state === 'running';   // T33: full install in flight on this station
+    const instTxt = `${dev.wu_install_done ?? 0}/${dev.wu_install_total ?? 0}`;
     const wuAgo = m => m === null || m === undefined ? '—' : m < 1 ? 'just now' : m < 60 ? Math.round(m) + 'm ago' : (m / 60).toFixed(1) + 'h ago';
     const dupNote = dev.duplicates ? `<div class="sub2">${dev.duplicates} duplicate game id(s) awaiting server resolution</div>` : '';
     const kindCls = {update_required:'up', rollback_required:'rb', missing_from_machine:'mi', unmanaged_game:'ung', unapproved_app:'un', duplicate_resolved:'up'};
@@ -416,14 +420,15 @@ async function refresh(){
         : ''}</td>
       <td style="max-width:340px">${chips}${appChips}${suChip}${jobs}</td>
       <td>
-        <span class="pill ${dn?'':up?'yel':'ok'}" ${dn?'hidden':''} title="${up?`${dev.wu_pending} Windows update${dev.wu_pending===1?'':'s'} pending — last poll ${wuAgo(dev.wu_scan_min_ago)}`:'Windows updates: none pending'}">${up?`${dev.wu_pending} update${dev.wu_pending===1?'':'s'}`:'active'}</span>
+        <span class="pill ${inst?'yel':dn?'':up?'yel':'ok'}" ${(dn&&!inst)?'hidden':''} title="${inst?`Windows Update install running — ${instTxt} done; station held down while updates install; the PC shows a full-screen overlay`:up?`${dev.wu_pending} Windows update${dev.wu_pending===1?'':'s'} pending — last poll ${wuAgo(dev.wu_scan_min_ago)}`:'Windows updates: none pending'}">${inst?`${instTxt} installing`:up?`${dev.wu_pending} update${dev.wu_pending===1?'':'s'}`:'active'}</span>
         <span class="pill dn" ${dn?'':'hidden'}>${dev.online?'downed':'downed · queued'}</span>
       </td>
       <td class="swcell"><span class="sw" role="switch" aria-checked="${dn}" title="${dev.online?'toggle downed state (swaps out-of-service wallpaper on the PC)':'agent unreachable — downed state is stored and will be applied when it returns'}" onclick="toggleDown('${dev.client_id}', !${dn})"></span></td>
       <td>
         <button class="btn" ${dev.online?'':'disabled'} onclick="locate('${dev.client_id}')">locate</button>
         <button class="btn" onclick="printLabel('${dev.client_id}')">label</button>
-        <button class="btn" ${dev.online?'':'disabled'} title="Poll Windows Update now — the agent scans on its next beat and the result rides its next report (timed polls run on their own interval)" onclick="scanUpdates('${dev.client_id}')">updates</button>
+        <button class="btn" ${dev.online&&!inst?'':'disabled'} title="${inst?'install running — '+instTxt+' done':'Install ALL pending Windows updates on this station now — full-screen overlay on the PC, station held downed until the install ends, auto-reboot only if Windows Update demands it'}" onclick="installUpdates('${dev.client_id}')">${inst?`installing ${instTxt}`:'updates'}</button>
+        <button class="btn" ${dev.online?'':'disabled'} title="Just poll Windows Update for a fresh pending count (no install)" onclick="scanUpdates('${dev.client_id}')">re-scan</button>
         ${dev.wallpaper_drift?`<button class="btn yel" ${dev.online?'':'disabled'} title="Desktop wallpaper on this PC no longer matches the enforced image — the agent re-verifies and re-applies it on its next beat" onclick="syncWallpaper('${dev.client_id}')">sync</button>`:''}
         <button class="btn danger" title="Offboard this PC — remove it from the fleet and revoke its PIN" onclick="offboard('${dev.client_id}')">&#128465;</button>
       </td>

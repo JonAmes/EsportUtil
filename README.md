@@ -21,6 +21,11 @@ agent resource gate). Windows-box runtime gates remain — see `deploy/BUILD.md`
 - **PIN onboarding:** a new agent reports a 4-digit PIN; the operator names it in the dashboard.
 - **Downed state:** per-PC toggle; the agent converges the desktop wallpaper to a Content
   Library "out of service" image (baseline restored when cleared).
+- **One-click Windows Update install:** the dashboard "updates" button queues an `install_updates`
+  directive; the agent installs EVERY pending update one at a time via the Windows Update Agent API
+  while the PC shows a full-screen blue update overlay (nothing on the machine can dismiss it) and the
+  station is auto-marked downed, restored to active when the run ends. The box reboots ONLY if WUA's
+  own RebootRequired verdict says so; progress (done/total) streams to the dashboard pill and client view.
 - **Installed apps & games come from the Windows registry:** the software inventory walks the
   Uninstall key in all four views — HKLM 64-bit, HKLM 32-bit (= WOW6432Node, where Steam, Battle.net
   and Epic register; a 64-bit process never sees those in the default view), HKCU 64-bit and HKCU

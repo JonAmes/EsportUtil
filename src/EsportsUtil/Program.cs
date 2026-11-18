@@ -6,13 +6,14 @@ using Microsoft.AspNetCore.Builder;
 string? roleFlag = null;
 string? configPath = null, foundConfig = null, serviceNameFlag = null, finalizeTarget = null;
 int parentPidFlag = -1;
-bool overlayMode = false, downedOverlayMode = false, trayFlag = false, serviceFlag = false;
+bool overlayMode = false, downedOverlayMode = false, updateOverlayMode = false, trayFlag = false, serviceFlag = false;
 var rawArgs = new List<string>(args);
 for (int i = 0; i < args.Length; i++)
     switch (args[i])
     {
         case LocateOverlayRequest.Flag: overlayMode = true; break;
         case DownedOverlayRequest.Flag: downedOverlayMode = true; break;
+        case UpdateOverlayRequest.Flag: updateOverlayMode = true; break;
         case "--role" when i + 1 < args.Length: roleFlag = args[++i]; break;
         case "--config" when i + 1 < args.Length: configPath = args[++i]; break;
         case "--tray": trayFlag = true; break;
@@ -25,7 +26,7 @@ for (int i = 0; i < args.Length; i++)
 // Double-click, not CLI (T30): a Windows foreground start with no explicit host flag and no
 // same-EXE child duty (overlay/downed-overlay/handoff) lands in the tray — "the app loads into
 // tray mode automatically". Console/Linux behavior is unchanged.
-if (roleFlag is null && !trayFlag && !serviceFlag && !overlayMode && !downedOverlayMode
+if (roleFlag is null && !trayFlag && !serviceFlag && !overlayMode && !downedOverlayMode && !updateOverlayMode
     && finalizeTarget is null && OperatingSystem.IsWindows())
     trayFlag = true;
 
@@ -85,6 +86,26 @@ if (downedOverlayMode)
     }
 #endif
     await ConsoleOverlay.RunDownedAsync(dreq, CancellationToken.None);
+    return 0;
+}
+
+// Same-EXE update overlay (T33): full-screen install card; nothing on the machine dismisses it —
+// the agent kills the child when the install reaches a terminal state (console self-exit is the backstop).
+if (updateOverlayMode)
+{
+    if (!UpdateOverlayRequest.TryParse(rawArgs, out var ureq))
+    {
+        Console.Error.WriteLine("usage: esportsutil --update-overlay --display-name NAME --pin NNNN --client-id ID [--model M] --progress-file PATH");
+        return 2;
+    }
+#if WINDOWS
+    if (OperatingSystem.IsWindows())
+    {
+        UpdateOverlayWindow.Run(ureq);
+        return 0;
+    }
+#endif
+    await ConsoleOverlay.RunUpdateAsync(ureq, CancellationToken.None);
     return 0;
 }
 
