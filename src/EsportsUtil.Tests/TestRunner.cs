@@ -1177,6 +1177,14 @@ var t33Client = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDi
     "EsportsUtil", "wwwroot", "client.html")));
 Check(t33Client.Contains("install_state==='running'"),
     "T33l client view shows 'installing X/Y — do not power off' while a T33 install runs on the machine");
+// ---------- T34: version visibility ----------
+var t34Root = JsonNode.Parse(await probe5.GetStringAsync("/api/state"));
+Check(t34Root["server_version"]!.GetValue<string>() == SelfUpdateWatch.CurrentVersion,
+    "T34a /api/state projects server_version = the server build");
+Check(t33Dash.Contains("id=\"c-ver\"") && t33Dash.Contains("dev.agent_version"),
+    "T34b dashboard header carries the server version pill and each device row its agent build chip");
+Check(t33Client.Contains("chipver"),
+    "T34c client view shows the agent version chip in its header");
 cts6.Cancel(); await loopTask6; await app5b.StopAsync();
 
 

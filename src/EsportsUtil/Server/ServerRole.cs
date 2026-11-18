@@ -557,6 +557,7 @@ public static class ServerRole
                 policy_active = policy is not null,
                 agents_reporting = devices.Count(d => d.online),
                 agents_total = devices.Count(),
+                server_version = SelfUpdateWatch.CurrentVersion,
                 devices,
                 alerts = hub.Recent().AsEnumerable().Reverse(),
                 budgets = cfg.Budgets,

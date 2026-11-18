@@ -146,6 +146,7 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
   <div class="head">
     <span class="logo" id="brand">E</span>
     <h1>E-Sports Dashboard</h1>
+    <span class="chip mono" id="c-ver" title="server build" style="font-size:11px">v–</span>
     <span class="chip">manifest <b id="c-manifest">–</b></span>
     <span class="chip mono">factory <b id="c-factory">–</b> entries</span>
     <a class="chip" href="/settings" style="text-decoration:none;color:var(--acc)">settings</a>
@@ -365,6 +366,7 @@ async function refresh(){
   ld.className = 'dot ' + (d.agents_reporting > 0 ? 'ok' : 'bad');
   document.getElementById('c-live').textContent = `${d.agents_reporting}/${d.agents_total} agents reporting`;
   document.getElementById('c-manifest').textContent = d.manifest_version;
+  document.getElementById('c-ver').textContent = 'v' + (d.server_version || '?');
   document.getElementById('c-factory').textContent = d.factory_entries;
 
   const fixable = d.devices.reduce((n, x) => n + ((x.issues||[]).filter(i => FIXABLE[i.kind]).length), 0);
@@ -410,7 +412,7 @@ async function refresh(){
     const appChips = (dev.apps || []).filter(a => a.up_to_date === false).map(a =>
       `<span class="cchip ung act" title="${esc(a.app_id)} v${esc(a.version || '?')} is behind the vendor's current release — click to push the vendor installer update" onclick="pushAppUpdate('${dev.client_id}','${esc(a.app_id)}')">outdated ${esc(a.app_id)} ${esc(a.version || '')}</span>`).join('');
     return `<tr class="${dn?'downed':''}">
-      <td><span class="dev"><span class="dot ${dotCls}"></span><a href="#" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`},${dev.location?`'${esc(dev.location)}'`:'null'});return false">${esc(dev.display_name)}${dev.pending?' <span class="sub2">(awaiting name)</span>':''}</a></span>
+      <td><span class="dev"><span class="dot ${dotCls}"></span><a href="#" onclick="rename('${dev.client_id}',${dev.pending?'null':`'${esc(dev.display_name)}'`},${dev.location?`'${esc(dev.location)}'`:'null'});return false">${esc(dev.display_name)}${dev.pending?' <span class="sub2">(awaiting name)</span>':''}</a>${dev.agent_version?` <span class="chip mono" style="font-size:10px;padding:1px 7px${dev.agent_version!==(d.server_version||'')?';color:#eab308':''}" title="${dev.agent_version!==(d.server_version||'')?'agent build v'+esc(dev.agent_version)+' — differs from server v'+esc(d.server_version||'?')+' (self-update pending)':'agent build'}">v${esc(dev.agent_version)}</span>`:''}</span>
         ${dev.location?`<div class="sub2" style="margin-left:16px">${esc(dev.location)}</div>`:''}
         ${dev.machine_model?`<div class="sub2" style="margin-left:16px">${esc(dev.machine_model)}</div>`:''}${dupNote}</td>
       <td><span class="pill ${dev.online?'ok':'bad'} mono pinx" title="Revoke PIN ${esc(dev.device_pin)} and offboard this PC" onclick="offboard('${dev.client_id}')">${esc(dev.device_pin)}&nbsp;<span style="opacity:.5">✕</span></span></td>
