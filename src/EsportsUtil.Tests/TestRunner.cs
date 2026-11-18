@@ -1185,6 +1185,8 @@ Check(t33Dash.Contains("id=\"c-ver\"") && t33Dash.Contains("dev.agent_version"),
     "T34b dashboard header carries the server version pill and each device row its agent build chip");
 Check(t33Client.Contains("chipver"),
     "T34c client view shows the agent version chip in its header");
+Check(AgentInfo.Version == SelfUpdateWatch.CurrentVersion && AgentInfo.Version != "0.1.0",
+    "T34d agent reports/heartbeats carry the REAL build version, not the old 0.1.0 protocol constant");
 cts6.Cancel(); await loopTask6; await app5b.StopAsync();
 
 

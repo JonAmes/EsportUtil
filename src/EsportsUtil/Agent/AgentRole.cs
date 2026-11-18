@@ -109,7 +109,7 @@ public sealed class AgentClient(HttpClient http, EsportsConfig cfg, AgentIdentit
     }
 }
 
-public static class AgentInfo { public const string Version = "0.1.0"; }
+public static class AgentInfo { public static string Version => SelfUpdateWatch.CurrentVersion; }
 
 /// <summary>The agent loop: heartbeat on interval (tiny fixed payload) is the spine; reports/manifest run
 /// on the slow timer or right after register — never per heartbeat. Directives and desired_state are
