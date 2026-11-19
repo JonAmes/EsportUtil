@@ -88,7 +88,7 @@ public static class SelfUpdateWatch
 
     /// <summary>Beat hook: rate-limited GitHub check; on a newer release, download+verify
     /// fire-and-forget. The heartbeat never waits on GitHub.</summary>
-    public static async Task CheckAsync(HttpClient http, EsportsConfig cfg, CancellationToken ct, bool force = false)
+    public static async Task CheckAsync(HttpClient http, EsportsConfig cfg, CancellationToken ct, bool force = false, SemaphoreSlim? workGate = null)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         if (_applying) return;   // staged apply in flight (or done): never re-check over live progress
@@ -125,8 +125,13 @@ public static class SelfUpdateWatch
             : NewerThan(CurrentVersion, latest!) ? "update_available" : "up_to_date";
         Last = new SelfUpdateVerdict(CurrentVersion, latest, state, null, err, now);
         if (state != "update_available" || !cfg.SelfUpdateApply || _applying) return;
+        // T45: never restart the agent over a running job — an Environment.Exit mid-SteamCMD
+        // orphans the steamcmd process, and the relaunched agent then takes the NEXT job while
+        // the orphan still runs: two SteamCMDs collide and fail with exit 7. Take the machine's
+        // work gate (held by the job runner); if busy, defer — the next check beat retries.
+        if (workGate is not null && !await workGate.WaitAsync(0, ct)) return;
         _applying = true;   // one in-flight apply; a staged "ready" download is never re-fetched
-        _ = Task.Run(() => ApplyAsync(http, rel!, cfg, ct));
+        _ = Task.Run(async () => { try { await ApplyAsync(http, rel!, cfg, ct); } finally { workGate?.Release(); } });
     }
 
     /// <summary>Reset for tests.</summary>

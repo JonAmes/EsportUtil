@@ -49,8 +49,16 @@ public sealed class JobStore
     public Job? NextQueued(string clientId)
     {
         lock (_gate)
+        {
+            // T45: one job in flight per machine, enforced — the docstring always promised it. A
+            // running job means SteamCMD (or an installer) owns this machine right now; handing a
+            // second job around a stalled/zombie state caused concurrent SteamCMDs, which collide
+            // on the content platform and surface as opaque 'steamcmd exit 7'. FailAbandoned still
+            // times the zombie out, so the queue can never stall forever.
+            if (_jobs.Any(j => j.ClientId == clientId && j.State == "running")) return null;
             return _jobs.Where(j => j.ClientId == clientId && j.State == "queued")
                         .OrderBy(j => j.CreatedUnix).FirstOrDefault();
+        }
     }
 
     /// <summary>Agent-reported state transition. Returns the updated job, or null for an unknown/mismatched id.</summary>

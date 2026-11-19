@@ -79,8 +79,26 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
 
     // ---------- handlers ----------
 
+    /// <summary>T45: one SteamCMD at a time per machine. Polls until no OTHER process named
+    /// 'steamcmd' exists (a crash-restart can orphan one), bounded by limit; false = still there.</summary>
+    public static async Task<bool> WaitForForeignSteamCmdAsync(TimeSpan limit, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow + limit;
+        while (Process.GetProcessesByName("steamcmd").Length > 0)
+        {
+            if (DateTime.UtcNow >= deadline) return false;
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+        }
+        return true;
+    }
+
     private async Task<(bool, string)> UpdateGameAsync(Job job, CancellationToken ct)
     {
+        // T45: SteamCMD is machine-exclusive — two instances collide on Steam's content
+        // platform and both fail with the opaque 'steamcmd exit 7' (connection error). A foreign
+        // steamcmd here means an orphan from an agent that restarted mid-job; wait it out.
+        if (!await WaitForForeignSteamCmdAsync(TimeSpan.FromMinutes(cfg.JobTimeoutMin), ct))
+            return (false, "another SteamCMD is still running on this machine — refused to collide; push again");
         // T42: a null job path now means "install into the machine's default Steam library" —
         // master-list push/install onto stations that never had the game.
         var dir = !string.IsNullOrWhiteSpace(job.Path) ? job.Path! : GameScanner.DefaultSteamRoot();

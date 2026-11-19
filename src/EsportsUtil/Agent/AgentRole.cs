@@ -185,6 +185,9 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
     private string? _lastHash;
     private string? _wallpaperKey;   // desired wallpaper currently applied: content_id while downed, "venue@<sha>" for the venue upload
     private bool _forceSelfUpdate;   // self_update directive (T30): check GitHub on this beat
+    // T45: machine work gate — one app/process job in flight at a time, shared with the
+    // self-update handoff so an agent restart can never orphan a running SteamCMD.
+    internal static readonly SemaphoreSlim WorkGate = new(1, 1);
     private bool _forceWallpaper;    // sync_wallpaper directive: re-run convergence even if the key is unchanged
     private string? _steamCmdKey;    // last reported "found|install_state" verdict; flip forces a prompt report
     private bool _wpDriftShown;      // last drift verdict reported to the server (flip → force a report)
@@ -370,13 +373,16 @@ public sealed class AgentLoop(HttpClient http, EsportsConfig cfg)
                         // Self-update (T30): GitHub release cadence check; download+verify+handoff
                         // runs fire-and-forget — the heartbeat never waits on GitHub.
                         var suNow = _forceSelfUpdate; _forceSelfUpdate = false;
-                        await SelfUpdateWatch.CheckAsync(http, cfg, ct, force: suNow);
-                        if (ack.Job is { } job)
+                        await SelfUpdateWatch.CheckAsync(http, cfg, ct, force: suNow, WorkGate);
+                        if (ack.Job is { } job && await WorkGate.WaitAsync(0, ct))
                         {
                             Console.WriteLine($"job {job.Kind} '{job.Subject}' started ({job.JobId[..8]})");
                             await runner.ReportJobStateAsync(job, "running", null, ct);
-                            var (ok, detail) = await runner.RunAsync(job, ct);
-                            await runner.ReportJobStateAsync(job, ok ? "succeeded" : "failed", detail, ct);
+                            string resultDetail; bool resultOk;
+                            try { (resultOk, resultDetail) = await runner.RunAsync(job, ct); }
+                            finally { WorkGate.Release(); }
+                            await runner.ReportJobStateAsync(job, resultOk ? "succeeded" : "failed", resultDetail, ct);
+                            var (ok, detail) = (resultOk, resultDetail);
                             Console.WriteLine($"job {job.Kind} '{job.Subject}' → {(ok ? "succeeded" : "failed")}: {detail}");
                             _recentJobs.Insert(0, job with
                             {

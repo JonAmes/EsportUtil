@@ -1786,6 +1786,64 @@ printf '"999"\n(\n\t\t"name"\t\t"Counter-Strike 2"\n\t\t"depots"\n\t\t(\n\t\t\t"
     await app9e.StopAsync();
 }
 
+// ---------- T45: one job in flight per station (kills concurrent-SteamCMD 'exit 7' collisions) ----------
+{
+    var dir9f = Path.Combine(tmp, "srv9f"); Directory.CreateDirectory(dir9f);
+    File.WriteAllText(Path.Combine(dir9f, "MasterManifest.json"), Wire.ToJson(new MasterManifest(4, DateTimeOffset.UtcNow,
+        new List<MasterGame>
+        {
+            new("alpha_game", "1", AppId: "450001", DisplayName: "Alpha Game"),
+            new("beta_game", "1", AppId: "450002", DisplayName: "Beta Game"),
+        }, new List<FactoryEntry>())));
+    using var app9f = ServerRole.BuildApp(new EsportsConfig { Role = "server", ServerUrl = "http://0.0.0.0:4399", DataDir = dir9f });
+    await app9f.StartAsync();
+    using var probe9f = new HttpClient { BaseAddress = new Uri("http://127.0.0.1:4399"), Timeout = TimeSpan.FromSeconds(5) };
+    StringContent C9f(object b) => new(Wire.ToJson(b), System.Text.Encoding.UTF8, "application/json");
+    await probe9f.PostAsync("/api/register", C9f(new RegisterRequest("t45one", "9971", "Solo Bench")));
+    async Task<AckEnvelope> Beat45()
+    {
+        var r = await probe9f.PostAsync("/api/heartbeat", C9f(new HeartbeatRequest("t45one", "9971", DateTimeOffset.UtcNow, "0.5.16")));
+        return Wire.FromJson<AckEnvelope>(await r.Content.ReadAsStringAsync())!;
+    }
+    var q1 = JsonNode.Parse(await (await probe9f.PostAsync("/api/master-install", C9f(new MasterJobRequest("450001")))).Content.ReadAsStringAsync())!;
+    var q2 = JsonNode.Parse(await (await probe9f.PostAsync("/api/master-install", C9f(new MasterJobRequest("450002")))).Content.ReadAsStringAsync())!;
+    Check(q1["queued"]!.GetValue<int>() == 1 && q2["queued"]!.GetValue<int>() == 1, "T45a two installs queued on one station");
+    var beat1 = await Beat45();
+    Check(beat1.Job is not null && beat1.Job.State == "queued", "T45b first heartbeat hands out exactly ONE job");
+    await probe9f.PostAsync("/api/job_update", C9f(new JobUpdateRequest(beat1.Job!.JobId, "t45one", "running")));
+    var beat2 = await Beat45();
+    Check(beat2.Job is null, "T45c while a job is RUNNING the heartbeat hands out NO second job — the server never lets one machine run two apps at once (this is what collided two SteamCMDs into 'steamcmd exit 7')");
+    await probe9f.PostAsync("/api/job_update", C9f(new JobUpdateRequest(beat1.Job.JobId, "t45one", "succeeded")));
+    var beat3 = await Beat45();
+    Check(beat3.Job is not null && beat3.Job.Subject == "beta_game", "T45d the moment job one succeeds, the NEXT queued job flows — serial queue, never stalled");
+    await probe9f.PostAsync("/api/job_update", C9f(new JobUpdateRequest(beat3.Job!.JobId, "t45one", "running")));
+    Check((await Beat45()).Job is null, "T45e second job also runs alone");
+    await probe9f.PostAsync("/api/job_update", C9f(new JobUpdateRequest(beat3.Job.JobId, "t45one", "succeeded")));
+    Check((await Beat45()).Job is null, "T45f empty queue hands out nothing");
+
+    // Agent-side backstop: a steamcmd orphaned by a crash-restart must be waited out, never collided with.
+    // NB: copy a REAL standalone ELF — this box's coreutils is a name-dispatching multicall binary,
+    // so a copied 'sleep' renamed to steamcmd execs itself out instantly ("unknown program").
+    var fakeSc = Path.Combine(dir9f, "steamcmd");
+    var imp = new[] { "/usr/bin/python3.14", "/usr/bin/python3", "/usr/bin/python" }.FirstOrDefault(File.Exists)
+              ?? throw new InvalidOperationException("T45 needs a python3 to impersonate an orphan steamcmd");
+    File.Copy(imp, fakeSc, overwrite: true);
+    var t0 = DateTime.UtcNow;
+    using (var orph = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(fakeSc, "-c \"import time;time.sleep(3)\"") { UseShellExecute = false })!)
+    {
+        var waited = await JobRunner.WaitForForeignSteamCmdAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+        var el = DateTime.UtcNow - t0;
+        Check(waited && el.TotalSeconds >= 2, "T45g agent waits for a foreign steamcmd to finish before launching its own (no exit-7 collision)");
+    }
+    using (var orph = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(fakeSc, "-c \"import time;time.sleep(60)\"") { UseShellExecute = false })!)
+    {
+        var gaveUp = await JobRunner.WaitForForeignSteamCmdAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
+        orph.Kill();
+        Check(!gaveUp, "T45h a steamcmd that never ends is refused past the bounded wait — job fails with a clear 'refused to collide' reason instead of hanging forever");
+    }
+    await app9f.StopAsync();
+}
+
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
 return failed;
