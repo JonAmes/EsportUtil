@@ -285,6 +285,7 @@ public static class ServerRole
         // Shared queueing for install (update_game) and uninstall (remove_game).
         // client_id == null means EVERY active station (that's the "push"). Returns queued/skipped/reasons;
         // queued < 0 encodes a request error (-1 unknown entry, -2 unknown client).
+        const string MinVerbAgent = "0.5.12";   // T44: agent build that knows remove_game + null-path fallback
         (int queued, int skipped, List<string> reasons) QueueMasterJob(string appId, string kind, string? clientId)
         {
             var m = manifests.LoadMaster();
@@ -306,6 +307,7 @@ public static class ServerRole
                 string? path = null;
                 if (kind == "update_game")
                 {
+                    // (path resolution below)
                     var lm = manifests.LoadReport(cid);
                     path = lm?.GameReports
                         .FirstOrDefault(gr => gr.Status != "DUPLICATE_FOUND"
@@ -315,6 +317,17 @@ public static class ServerRole
                             .FirstOrDefault(b => b.GameId.Equals(normId, StringComparison.OrdinalIgnoreCase))?.InstallPath;
                     // path == null => the agent installs into its default Steam library root.
                 }
+                // T44 capability gate: never queue a verb the station's agent can't execute.
+                // remove_game AND the null-path "default Steam library" install fallback both
+                // shipped in agent 0.5.12; older agents fail them cryptically (live report:
+                // 0.5.11 died with "missing install path" on a null-path update_game). Unknown
+                // or unparseable versions stay optimistic — the agent's own unknown-kind
+                // refusal is the backstop.
+                var av = manifests.Summaries.TryGetValue(cid, out var sum44) ? sum44.AgentVersion : null;
+                var knownOld = !string.IsNullOrWhiteSpace(av) && int.TryParse(av.Split('.')[0], out _)
+                               && AppCatalog.VersionCompare(av!, MinVerbAgent) < 0;
+                if (knownOld && (kind == "remove_game" || path is null))
+                { reasons.Add($"agent {av} too old for this verb — needs {MinVerbAgent}+ (self-update pending)"); skipped++; continue; }
                 jobs.Enqueue(cid, kind, normId, g.AppId, path);
                 queued++;
             }

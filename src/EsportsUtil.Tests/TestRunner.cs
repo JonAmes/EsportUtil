@@ -1743,6 +1743,49 @@ printf '"999"\n(\n\t\t"name"\t\t"Counter-Strike 2"\n\t\t"depots"\n\t\t(\n\t\t\t"
     await app9c.StopAsync();
 }
 
+// ---------- T44: capability gate — never queue a verb the station's agent can't run ----------
+{
+    var dir9d = Path.Combine(tmp, "srv9d"); Directory.CreateDirectory(dir9d);
+    File.WriteAllText(Path.Combine(dir9d, "MasterManifest.json"), Wire.ToJson(new MasterManifest(3, DateTimeOffset.UtcNow,
+        new List<MasterGame> { new("counter_strike_2", "999", AppId: "730", DisplayName: "Counter-Strike 2") }, new List<FactoryEntry>())));
+    using var app9d = ServerRole.BuildApp(new EsportsConfig { Role = "server", ServerUrl = "http://0.0.0.0:4397", DataDir = dir9d });
+    await app9d.StartAsync();
+    using var probe9d = new HttpClient { BaseAddress = new Uri("http://127.0.0.1:4397"), Timeout = TimeSpan.FromSeconds(5) };
+    StringContent C9d(object b) => new(Wire.ToJson(b), System.Text.Encoding.UTF8, "application/json");
+    await probe9d.PostAsync("/api/register", C9d(new RegisterRequest("t44old", "9961", "Old Bench")));
+    await probe9d.PostAsync("/api/register", C9d(new RegisterRequest("t44new", "9962", "New Bench")));
+    var repOld44 = await probe9d.PostAsync("/api/report", C9d(new LocalManifest("t44old", "9961", "Old Bench",
+        DateTimeOffset.UtcNow, "0.5.11", new JsonObject { ["machineModel"] = "Prime X" }, new List<GameReport>())));
+    await probe9d.PostAsync("/api/report", C9d(new LocalManifest("t44new", "9962", "New Bench",
+        DateTimeOffset.UtcNow, AgentInfo.Version, new JsonObject { ["machineModel"] = "Prime X" }, new List<GameReport>())));
+    Check(repOld44.IsSuccessStatusCode, "T44a fixture stations report — one pinned to the old 0.5.11 agent, one current");
+    var ui44 = JsonNode.Parse(await (await probe9d.PostAsync("/api/master-uninstall", C9d(new MasterJobRequest("730")))).Content.ReadAsStringAsync())!;
+    Check(ui44["queued"]!.GetValue<int>() == 1 && ui44["skipped"]!.GetValue<int>() == 1 &&
+          ui44["reasons"]!.AsArray().Any(x => x!.GetValue<string>().Contains("too old")),
+        "T44b uninstall SKIPS a pre-0.5.12 agent with a clear self-update reason — never a doomed remove_game an old agent refuses as unknown kind");
+    var ii44 = JsonNode.Parse(await (await probe9d.PostAsync("/api/master-install", C9d(new MasterJobRequest("730")))).Content.ReadAsStringAsync())!;
+    Check(ii44["queued"]!.GetValue<int>() == 1 && ii44["skipped"]!.GetValue<int>() == 1 &&
+          ii44["reasons"]!.AsArray().Any(x => x!.GetValue<string>().Contains("too old")),
+        "T44c push-install with no resolvable path skips the old agent too — its 0.5.11 code throws 'missing install path' on a null path (the live report)");
+    var st44 = JsonNode.Parse(await probe9d.GetStringAsync("/api/state"))!;
+    var oldDev44 = st44["devices"]!.AsArray().Single(d => d!["client_id"]!.GetValue<string>() == "t44old");
+    Check(oldDev44["agent_version"]!.GetValue<string>() == "0.5.11" &&
+          (oldDev44["jobs"] is null || !oldDev44["jobs"]!.AsArray().Any(j => j!["kind"]!.GetValue<string>() is "remove_game" or "update_game")),
+        "T44d the old station carries its agent_version chip and received ZERO jobs — refused at queue time, not executed-then-failed");
+    await app9d.StopAsync();
+    using var app9e = ServerRole.BuildApp(new EsportsConfig { Role = "server", ServerUrl = "http://0.0.0.0:4398", DataDir = dir9d });
+    await app9e.StartAsync();
+    using var probe9e = new HttpClient { BaseAddress = new Uri("http://127.0.0.1:4398"), Timeout = TimeSpan.FromSeconds(5) };
+    var st44r = JsonNode.Parse(await probe9e.GetStringAsync("/api/state"))!;
+    var oldDevR = st44r["devices"]!.AsArray().Single(d => d!["client_id"]!.GetValue<string>() == "t44old");
+    var ui44r = JsonNode.Parse(await (await probe9e.PostAsync("/api/master-uninstall", C9d(new MasterJobRequest("730")))).Content.ReadAsStringAsync())!;
+    Check(oldDevR["agent_version"]!.GetValue<string>() == "0.5.11" &&
+          ui44r["queued"]!.GetValue<int>() == 0 &&
+          ui44r["reasons"]!.AsArray().Any(x => x!.GetValue<string>().Contains("too old")),
+        "T44e after a SERVER RESTART the agent chip and the gate still work from hydrated stored reports — no silent blank-version window until each station re-reports");
+    await app9e.StopAsync();
+}
+
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
 return failed;

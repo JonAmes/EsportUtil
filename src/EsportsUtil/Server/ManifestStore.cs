@@ -15,6 +15,21 @@ public sealed class ManifestStore
         _dataDir = dataDir;
         Directory.CreateDirectory(dataDir);
         Directory.CreateDirectory(ReportsDir);
+        // T44: summaries (agent version, game counts) drive the dashboard chips AND the queue
+        // capability gate — hydrate from stored reports at startup so a server restart never
+        // blanks the agent build chip or blinds the gate until every station reports again.
+        foreach (var f in Directory.GetFiles(ReportsDir, "*.json"))
+        {
+            try
+            {
+                var r = Wire.FromJson<LocalManifest>(File.ReadAllText(f));
+                if (r is null || string.IsNullOrEmpty(r.ClientId)) continue;
+                Summaries[r.ClientId] = new ManifestSummary(r.ClientId, r.ReportTimestamp, "",
+                    r.GameReports?.Count ?? 0, r.Duplicates?.Count ?? 0, r.AgentVersion,
+                    r.MachineState?["machineModel"]?.GetValue<string>());
+            }
+            catch { /* a corrupt report file skips; the station's next report replaces it */ }
+        }
     }
 
     private string ManifestPath => Path.Combine(_dataDir, "MasterManifest.json");
