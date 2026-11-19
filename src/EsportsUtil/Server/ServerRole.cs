@@ -308,7 +308,9 @@ public static class ServerRole
                 {
                     var lm = manifests.LoadReport(cid);
                     path = lm?.GameReports
-                        .FirstOrDefault(gr => gr.GameId.Equals(normId, StringComparison.OrdinalIgnoreCase) && gr.Status != "DUPLICATE_FOUND")?.InstallPath
+                        .FirstOrDefault(gr => gr.Status != "DUPLICATE_FOUND"
+                            && ((!string.IsNullOrEmpty(g.AppId) && gr.SteamAppId == g.AppId)      // T43: steam_addid.txt-tagged copy
+                                || gr.GameId.Equals(normId, StringComparison.OrdinalIgnoreCase)))?.InstallPath
                         ?? m.FactoryStateMap.SelectMany(f => f.GameBaselines)
                             .FirstOrDefault(b => b.GameId.Equals(normId, StringComparison.OrdinalIgnoreCase))?.InstallPath;
                     // path == null => the agent installs into its default Steam library root.

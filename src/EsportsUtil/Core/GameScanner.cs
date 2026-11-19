@@ -139,6 +139,31 @@ public static class GameScanner
         return "unknown";
     }
 
+    /// <summary>AppID marker convention (T43): a game folder may contain steam_addid.txt holding its
+    /// Steam AppID (operators drop it beside games installed outside Steam's own manifests, e.g. an
+    /// alias folder "CS2" declaring 730). First non-blank line's first digit run wins; 1-10 digits or
+    /// the tag is junk and reports as null — never a guess. Same probe style as ProbeVersion.</summary>
+    public static string? ProbeSteamAppId(string gameDir)
+    {
+        foreach (var name in new[] { "steam_addid.txt", "STEAM_ADDID.txt" })
+        {
+            var f = Path.Combine(gameDir, name);
+            if (!File.Exists(f)) continue;
+            try
+            {
+                // first digit RUN on any line wins (comment/blank prefixes tolerated). Word boundaries
+                // matter: an 11-digit junk run is rejected outright, and "CS2" in a comment never
+                // masquerades as AppID 2. 1-10 standalone digits = AppID.
+                var m = File.ReadAllLines(f)
+                    .Select(l => System.Text.RegularExpressions.Regex.Match(l, @"\b\d{1,10}\b"))
+                    .FirstOrDefault(mm => mm.Success);
+                if (m is not null) return m.Value;
+            }
+            catch (IOException) { }
+        }
+        return null;
+    }
+
     public static (List<GameReport> Reports, List<DuplicateReport> Duplicates) Scan(IEnumerable<string> scanDirs)
     {
         var reports = new List<GameReport>();
@@ -159,7 +184,7 @@ public static class GameScanner
                     continue;
                 var id = NormalizeFolder(folder);
                 if (id.Length == 0) continue;
-                reports.Add(new GameReport(id, folder, dir, ProbeVersion(dir), DetectLauncher(root), "OK"));
+                reports.Add(new GameReport(id, folder, dir, ProbeVersion(dir), DetectLauncher(root), "OK", ProbeSteamAppId(dir)));
                 if (!byId.TryGetValue(id, out var paths)) byId[id] = paths = new List<string>();
                 paths.Add(dir);
             }

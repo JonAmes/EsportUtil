@@ -1689,6 +1689,60 @@ printf '"999"\n(\n\t\t"name"\t\t"Counter-Strike 2"\n\t\t"depots"\n\t\t(\n\t\t\t"
     await app9.StopAsync();
 }
 
+// ---------- T43: steam_addid.txt — clients tag games with their Steam AppID ----------
+{
+    var tagDir = Path.Combine(tmp, "t43tag"); Directory.CreateDirectory(tagDir);
+    File.WriteAllText(Path.Combine(tagDir, "steam_addid.txt"), "  # CS2 alias\n 730 \n");
+    Check(GameScanner.ProbeSteamAppId(tagDir) == "730",
+        "T43a steam_addid.txt is parsed for the first digit run — comment/blank prefixes tolerated");
+    var tagDir2 = Path.Combine(tmp, "t43tag2"); Directory.CreateDirectory(tagDir2);
+    File.WriteAllText(Path.Combine(tagDir2, "STEAM_ADDID.txt"), "bananas");
+    var tagDir3 = Path.Combine(tmp, "t43tag3"); Directory.CreateDirectory(tagDir3);
+    Check(GameScanner.ProbeSteamAppId(tagDir2) is null && GameScanner.ProbeSteamAppId(tagDir3) is null,
+        "T43b a junk marker or no marker means NO tag — the agent never guesses an AppID");
+
+    var root43 = Path.Combine(tmp, "t43root"); Directory.CreateDirectory(Path.Combine(root43, "CS2"));
+    File.WriteAllText(Path.Combine(root43, "CS2", "steam_addid.txt"), "730");
+    var (rep43, _) = GameScanner.Scan(new[] { root43 });
+    var wire43 = Wire.ToJson(rep43.Single(r => r.GameId == "cs2"));
+    Check(rep43.Single(r => r.GameId == "cs2").SteamAppId == "730" && wire43.Contains("\"steam_app_id\":\"730\""),
+        "T43c the folder scan picks up each game's steam_addid.txt — reports carry snake_case steam_app_id per schema");
+
+    var mf43 = new MasterManifest(5, DateTimeOffset.UtcNow,
+        new List<MasterGame> { new("counter_strike_2", "1.0.5", AppId: "730", DisplayName: "Counter-Strike 2") }, new());
+    var r43 = new LocalManifest("c43", "0001", null, DateTimeOffset.UtcNow, "test",
+        new JsonObject { ["machineModel"] = "Prime X" },
+        new List<GameReport> { new("cs2", "CS2", "/steam/common/CS2", "1.0.4", "steam", "OK", "730") });
+    var iss43 = Comparator.Games(r43, mf43);
+    Check(!iss43.Any(i => i.Kind == "unmanaged_game") && !iss43.Any(i => i.Kind == "missing_from_machine")
+          && iss43.Any(i => i.Kind == "update_required" && i.Subject == "cs2"),
+        "T43d an AppID-tagged alias folder pairs with its master entry by AppID — no unmanaged/missing flags, version diff still enforced");
+
+    var dir9c = Path.Combine(tmp, "srv9c");
+    Directory.CreateDirectory(dir9c);
+    File.WriteAllText(Path.Combine(dir9c, "MasterManifest.json"), Wire.ToJson(new MasterManifest(7, DateTimeOffset.UtcNow,
+        new List<MasterGame> { new("counter_strike_2", "abc123", AppId: "730", DisplayName: "Counter-Strike 2") }, new())));
+    using var app9c = ServerRole.BuildApp(new EsportsConfig { Role = "server", ServerUrl = "http://0.0.0.0:4394", DataDir = dir9c });
+    await app9c.StartAsync();
+    using var probe9c = new HttpClient { BaseAddress = new Uri("http://127.0.0.1:4394"), Timeout = TimeSpan.FromSeconds(5) };
+    StringContent C9c(object b) => new(Wire.ToJson(b), System.Text.Encoding.UTF8, "application/json");
+    Check((await probe9c.PostAsync("/api/register", C9c(new RegisterRequest("t43tag", "9951", "Tagged Bench")))).IsSuccessStatusCode,
+        "T43e fixture station registers");
+    Check((await probe9c.PostAsync("/api/report", C9c(new LocalManifest("t43tag", "9951", "Tagged Bench", DateTimeOffset.UtcNow,
+        "test", new JsonObject { ["machineModel"] = "Prime X" },
+        new List<GameReport> { new("cs2", "CS2", "/D/SteamLibrary/steamapps/common/CS2", "unknown", "steam", "OK", "730") })))).IsSuccessStatusCode,
+        "T43f a steam_addid-tagged report uploads cleanly (field optional — older agents unaffected)");
+    var mi43 = await probe9c.PostAsync("/api/master-install", C9c(new MasterJobRequest("730", "t43tag")));
+    var job43 = JsonNode.Parse(File.ReadAllText(Path.Combine(dir9c, "Jobs.json")))!.AsArray()
+        .Single(j => j!["kind"]!.GetValue<string>() == "update_game");
+    Check((int)mi43.StatusCode == 200 && job43!["path"]!.GetValue<string>() == "/D/SteamLibrary/steamapps/common/CS2",
+        "T43g master-install resolves its path through the steam_addid-tagged copy even when the folder name never matches the master id");
+    Check(File.ReadAllText(Path.Combine(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..")),
+        "schemas", "local_manifest.schema.json")).Contains("\"steam_app_id\""),
+        "T43h steam_app_id is a declared, pattern-checked contract field (schemas/local_manifest.schema.json)");
+    await app9c.StopAsync();
+}
+
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
 return failed;

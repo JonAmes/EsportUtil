@@ -61,6 +61,9 @@ public static class Comparator
         // is idempotent for already-normalized ids and catches hand-written display-name entries.
         var byId = new Dictionary<string, MasterGame>(StringComparer.OrdinalIgnoreCase);
         foreach (var g in m.MasterList) byId[Core.GameScanner.NormalizeFolder(g.GameId)] = g;
+        // T43: a steam_addid.txt tag on disk outranks folder-name guessing — pair by AppID first.
+        var byAppId = new Dictionary<string, MasterGame>(StringComparer.OrdinalIgnoreCase);
+        foreach (var g in m.MasterList) if (!string.IsNullOrEmpty(g.AppId)) byAppId[g.AppId!] = g;
 
         var reported = r.GameReports
             .Where(g => g.Status != "DUPLICATE_FOUND")
@@ -69,7 +72,10 @@ public static class Comparator
 
         foreach (var rep in reported.Values)
         {
-            if (!byId.TryGetValue(rep.GameId, out var want))
+            MasterGame? want = null;
+            if (!string.IsNullOrEmpty(rep.SteamAppId)) byAppId.TryGetValue(rep.SteamAppId!, out want);
+            want ??= byId.TryGetValue(rep.GameId, out var w2) ? w2 : null;
+            if (want is null)
             {
                 issues.Add(new Issue("unmanaged_game", rep.GameId, rep.CurrentVersion, KeepPath: rep.InstallPath));
                 continue;
@@ -87,6 +93,8 @@ public static class Comparator
         foreach (var (id, want) in byId)
         {
             if (reported.ContainsKey(id)) continue;
+            // T43: an alias folder tagged via steam_addid.txt covers this entry — not missing.
+            if (!string.IsNullOrEmpty(want.AppId) && reported.Values.Any(g => g.SteamAppId == want.AppId)) continue;
             var baseline = factory?.GameBaselines.FirstOrDefault(b => b.GameId.Equals(id, StringComparison.OrdinalIgnoreCase));
             issues.Add(new Issue("missing_from_machine", id, null, baseline?.Version ?? want.LatestVersion));
         }

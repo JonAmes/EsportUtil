@@ -25,6 +25,11 @@
           "game_id": { "type": "string" },
           "folder_name_used": { "type": "string" },
           "install_path": { "type": "string" },
+          "steam_app_id": {
+            "type": ["string", "null"],
+            "pattern": "^\\d{1,10}$",
+            "description": "T43: Steam AppID parsed from a steam_addid.txt marker file inside the game folder (operator drops it beside installs outside Steam's own manifests). Server pairs master-list entries by AppID ahead of folder-name ids. Null/absent = untagged."
+          },
           "current_version": { "type": "string" },
           "launcher": { "enum": ["steam", "epic", "gog", "battlenet", "other"] },
           "status": {

@@ -272,3 +272,17 @@ Agent compatibility: `remove_game` is a NEW job kind introduced in v0.5.12/0.5.1
 older than that **safely refuse** it (`unknown job kind — refused`, job marked failed, nothing
 touched) until they self-update from the GitHub release. A policy file is NOT required for any
 master verb — the protected-rules veto simply does not apply when none exist.
+
+## 🏷️ 13. steam_addid.txt — on-disk AppID tagging (§steam-addid — T43)
+
+Each Agent's folder scan probes every game folder for `steam_addid.txt` (also `STEAM_ADDID.txt`),
+same convention family as the `version.txt` version probe. The file's first standalone digit run
+(1-10 digits, word-boundary matched — "CS2" in a comment never parses as AppID 2) is that game's
+**Steam AppID**, reported as `game_reports[].steam_app_id`. Junk or missing marker → no tag, never
+a guess. Operators drop the file beside installs that live outside Steam's own appmanifests
+(alias folders, copied installs) so the fleet knows exactly which Steam app a folder is.
+
+Pairing priority on the server: an AppID tag **outranks** folder-name id matching. An alias folder
+`CS2` tagged `730` pairs with the master entry `counter_strike_2`/AppID 730 — no `unmanaged_game`,
+no `missing_from_machine`, version diff still enforced. `master-install` path resolution also
+follows the tagged copy. The field is optional: reports from older agents behave exactly as before.

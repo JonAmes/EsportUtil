@@ -13,7 +13,8 @@ public sealed record GameReport(
     string InstallPath,
     string CurrentVersion,
     string Launcher,
-    string Status);
+    string Status,
+    string? SteamAppId = null);
 
 public sealed record DuplicateReport(string GameId, List<string> Paths);
 
