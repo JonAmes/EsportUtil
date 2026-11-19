@@ -92,6 +92,13 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
         return true;
     }
 
+    /// <summary>T45b: transient SteamCMD content codes — a re-run of 'app_update validate' resumes
+    /// the partial download cheaply. 7=connection, 8=SUSPEND (the local Steam client preempts
+    /// steamcmd's download — normal on a running venue station), 12=download unavailable,
+    /// 26=remote disconnect. Everything else (disk, license, corruption) is real failure; retrying won't help.</summary>
+    public static bool IsTransientSteamCmdExit(int code) => code is 7 or 8 or 12 or 26;
+    public const int SteamCmdAttempts = 4;
+
     private async Task<(bool, string)> UpdateGameAsync(Job job, CancellationToken ct)
     {
         // T45: SteamCMD is machine-exclusive — two instances collide on Steam's content
@@ -109,9 +116,21 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
         // Prefer the discovered steamcmd (config path → winget link/package → PATH); fall back to
         // the bare config name only when nothing was located (job fails fast with exit != 0 then).
         var exe = SteamCmdWatch.Last is { Found: true, Path: { } sc } ? sc : cfg.SteamCmdPath;
-        var exit = await RunProcessAsync(exe, args, TimeSpan.FromMinutes(cfg.JobTimeoutMin), ct);
-        if (exit != 0) return (false, $"steamcmd exit {exit}");
-        return (true, $"app_update {job.Arg} validate → exit 0 in {dir}");
+        // T45b: a SUSPEND/connection code means "resume me" — re-run with backoff so the Steam
+        // client gets its turn and steamcmd picks the partial download back up, up to 4 attempts.
+        int exit = 0;
+        for (var attempt = 1; attempt <= SteamCmdAttempts; attempt++)
+        {
+            exit = await RunProcessAsync(exe, args, TimeSpan.FromMinutes(cfg.JobTimeoutMin), ct);
+            if (exit == 0)
+                return (true, attempt > 1
+                    ? $"app_update {job.Arg} validate → exit 0 in {dir} (resumed after {attempt - 1} interrupted attempt(s))"
+                    : $"app_update {job.Arg} validate → exit 0 in {dir}");
+            if (!IsTransientSteamCmdExit(exit) || attempt == SteamCmdAttempts) break;
+            await ReportJobStateAsync(job, "running", $"steamcmd interrupted (exit {exit}) — resume attempt {attempt + 1}/{SteamCmdAttempts}", ct);
+            await Task.Delay(TimeSpan.FromSeconds(20L * attempt), ct);
+        }
+        return (false, $"steamcmd exit {exit}" + (IsTransientSteamCmdExit(exit) ? $" (still interrupted after {SteamCmdAttempts} resume attempts — check station network/Steam client)" : ""));
     }
 
     private (bool, string) CleanupDuplicate(Job job)

@@ -1841,6 +1841,15 @@ printf '"999"\n(\n\t\t"name"\t\t"Counter-Strike 2"\n\t\t"depots"\n\t\t(\n\t\t\t"
         orph.Kill();
         Check(!gaveUp, "T45h a steamcmd that never ends is refused past the bounded wait — job fails with a clear 'refused to collide' reason instead of hanging forever");
     }
+
+    // T45b: resume-retry classification — the live failures were exit 8 (SUSPEND: the station's own
+    // Steam client preempted steamcmd's download), which a re-run simply resumes.
+    Check(JobRunner.IsTransientSteamCmdExit(7) && JobRunner.IsTransientSteamCmdExit(8) &&
+          JobRunner.IsTransientSteamCmdExit(12) && JobRunner.IsTransientSteamCmdExit(26),
+        "T45i connection/SUSPEND/unavailable/disconnect codes are transient — the install re-runs and resumes the partial download");
+    Check(!JobRunner.IsTransientSteamCmdExit(2) && !JobRunner.IsTransientSteamCmdExit(15) &&
+          !JobRunner.IsTransientSteamCmdExit(19) && !JobRunner.IsTransientSteamCmdExit(33),
+        "T45j disk/license/corrupt-path codes fail FAST — never four pointless retries on a real failure");
     await app9f.StopAsync();
 }
 
