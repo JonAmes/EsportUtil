@@ -123,6 +123,7 @@ public sealed record OperatorPasswordRequest(string Username, string Password);
 // ---- T36: compliance dismissals ----
 
 public sealed record IssueActionRequest(string ClientId);
+public sealed record FactoryDeployRequest(string? SourceClientId = null);   // T39: null = target's own baseline
 
 public static class Wire
 {

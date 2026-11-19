@@ -1453,6 +1453,94 @@ Check(t36Schema.Contains("\"installed_apps\"") && t36Schema.Contains("names only
     finally { Environment.SetEnvironmentVariable("ESU_HW_SEED", prevSeed); }
 }
 
+// ---------- T39: factory DEPLOY — push a baseline ONTO a machine ----------
+{
+    var port9 = 4393; var url9 = $"http://127.0.0.1:{port9}"; var dir9 = Path.Combine(tmp, "srv9");
+    var cfg9 = new EsportsConfig { Role = "server", ServerUrl = $"http://0.0.0.0:{port9}", DataDir = dir9 };
+    using var app9 = ServerRole.BuildApp(cfg9); await app9.StartAsync();
+    using var probe9 = new HttpClient { BaseAddress = new Uri(url9), Timeout = TimeSpan.FromSeconds(5) };
+    async Task<(int code, JsonNode json)> Api9(string path, object? body = null)
+    {
+        var r = await probe9.PostAsync(path, new StringContent(Wire.ToJson(body ?? new { }), System.Text.Encoding.UTF8, "application/json"));
+        var txt = await r.Content.ReadAsStringAsync();
+        return ((int)r.StatusCode, txt.Length > 0 ? JsonNode.Parse(txt)! : JsonNode.Parse("null")!);
+    }
+    async Task<JsonNode> Get9(string path) => JsonNode.Parse(await probe9.GetStringAsync(path))!;
+    async Task Reg9(string cid, string pin, string model) =>
+        await probe9.PostAsync("/api/register", new StringContent(Wire.ToJson(new RegisterRequest(cid, pin, model)), System.Text.Encoding.UTF8, "application/json"));
+
+    File.WriteAllText(Path.Combine(dir9, "ApprovedSoftwarePolicy.json"), Wire.ToJson(new ApprovedSoftwarePolicy(
+        1, DateTimeOffset.UtcNow, "report_only",
+        new List<SoftwareRule> { new("Steam"), new("Discord") },
+        new List<SoftwareRule> { new("Rogue Suite") })));
+
+    var src9 = "t39src-" + Guid.NewGuid().ToString("N")[..8];
+    var tgt9 = "t39tgt-" + Guid.NewGuid().ToString("N")[..8];
+    var nor9 = "t39nor-" + Guid.NewGuid().ToString("N")[..8];
+    await Reg9(src9, "9931", "Vertex Prime X"); await Reg9(tgt9, "9932", "Vertex Prime X"); await Reg9(nor9, "9933", "Ghost");
+    await Api9("/api/rename", new RenameRequest(src9, "Prime Template", "Zone A"));
+    await Api9("/api/rename", new RenameRequest(tgt9, "Messy Station", "Zone B"));
+
+    var srcMs9 = JsonNode.Parse("""
+        {"machineModel":"Vertex Prime X","installedApps":[
+          {"display_name":"Steam","publisher":"Valve"},
+          {"display_name":"WidgetPro Key","publisher":"WidgetPro"}]}
+        """)!;
+    var tgtMs9 = JsonNode.Parse("""
+        {"machineModel":"Vertex Prime X","installedApps":[
+          {"display_name":"Discord","publisher":"Discord Inc."},
+          {"display_name":"Leftovers Game","publisher":"Nobody"},
+          {"display_name":"Rogue Suite","publisher":"Rogue"},
+          {"display_name":"EsportsUtil Agent","publisher":"EsportsUtil"}]}
+        """)!;
+    Check((await Api9("/api/report", new LocalManifest(src9, "9931", "Prime Template", DateTimeOffset.UtcNow, AgentInfo.Version, srcMs9, new List<GameReport>()))).code == 200,
+        "T39a template source seeded its full report");
+    Check((await Api9("/api/report", new LocalManifest(tgt9, "9932", "Messy Station", DateTimeOffset.UtcNow, AgentInfo.Version, tgtMs9, new List<GameReport>()))).code == 200,
+        "T39b messy target seeded its full report");
+    Check((await Api9("/api/factory-state/" + src9)).json["ok"]!.GetValue<bool>(),
+        "T39c source baseline pulled (Steam + WidgetPro Key names, no versions)");
+
+    var pv9 = await Get9($"/api/factory-deploy-preview/{tgt9}?source={src9}");
+    Check(pv9["installs"]!.AsArray().Select(x => x!.GetValue<string>()).SequenceEqual(new[] { "Steam" }) &&
+          pv9["not_auto_installable"]!.AsArray().Select(x => x!.GetValue<string>()).SequenceEqual(new[] { "WidgetPro Key" }) &&
+          pv9["removals"]!.AsArray().Select(x => x!.GetValue<string>()).OrderBy(s => s).SequenceEqual(new[] { "Discord", "Leftovers Game" }),
+        "T39d preview: Steam installs from the catalog, WidgetPro Key reported not-auto-installable, Discord+Leftovers slated for uninstall");
+    Check(!pv9["removals"]!.AsArray().Any(x => x!.GetValue<string>() is "Rogue Suite" or "EsportsUtil Agent"),
+        "T39e true factory reset still spares policy-PROTECTED entries and the agent itself");
+
+    var (dc9, dj9) = await Api9("/api/factory-deploy/" + tgt9, new FactoryDeployRequest(src9));
+    var dev9 = Wire.FromJson<JsonDoc>(await probe9.GetStringAsync("/api/state"))!.devices.Single(x => x.client_id == tgt9);
+    Check(dc9 == 200 && dj9["queued_jobs"]!.AsArray().Count == 3 && dj9["deduped"]!.GetValue<int>() == 0 &&
+          dj9["source"]!.GetValue<string>() == src9,
+        "T39f deploy queued exactly 3 jobs (1 install + 2 removals) from the source baseline");
+    Check((dev9.jobs ?? new()).Any(j => j.kind == "install_app" && j.subject == "steam") &&
+          (dev9.jobs ?? new()).Count(j => j.kind == "remove_software") == 2,
+        "T39g the jobs ride to the target as install_app steam + two remove_software jobs the agent already knows how to run");
+
+    var (dr9, djr9) = await Api9("/api/factory-deploy/" + tgt9, new FactoryDeployRequest(src9));
+    Check(dr9 == 200 && djr9["queued_jobs"]!.AsArray().Count == 0 && djr9["deduped"]!.GetValue<int>() == 3,
+        "T39h re-deploy is a no-op — open jobs dedup, no double installs/uninstalls");
+
+    Check((await Api9("/api/factory-deploy/" + nor9, new FactoryDeployRequest(src9))).code == 404 &&
+          (await Api9("/api/factory-deploy/" + tgt9, new FactoryDeployRequest("bogus-source"))).code == 404 &&
+          (await Api9("/api/factory-deploy/nope", new FactoryDeployRequest(src9))).code == 404,
+        "T39i deploy 404s for a no-report target, a bogus baseline source, and an unknown device");
+
+    await Api9("/api/factory-state/" + tgt9);   // target captures its own baseline
+    var pvSelf = await Get9($"/api/factory-deploy-preview/{tgt9}");
+    Check(pvSelf["source"]!.GetValue<string>() == tgt9 &&
+          pvSelf["installs"]!.AsArray().Count == 0 && pvSelf["removals"]!.AsArray().Count == 0,
+        "T39j self-reconcile: preview with no source diffs the target against ITS OWN baseline — a clean no-op");
+
+    var dash10 = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "wwwroot", "dashboard.html"));
+    Check(dash10.Contains("deployFactory(") && dash10.Contains("id=\"dep-modal\"") &&
+          dash10.Contains("factory-deploy-preview") && dash10.Contains("depGo()") &&
+          dash10.Contains("d.factory_entries ?") && dash10.Contains("Factory reset will UNINSTALL"),
+        "T39k dashboard ships a per-row deploy button (only once a baseline exists), a preview modal, and a destructive-removals second confirm");
+
+    await app9.StopAsync();
+}
+
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
 return failed;

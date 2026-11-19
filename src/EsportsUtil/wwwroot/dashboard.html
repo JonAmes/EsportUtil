@@ -234,6 +234,20 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
     </div>
   </div>
 </div>
+<div class="modal" id="dep-modal" hidden onclick="if(event.target===this)closeDeploy()">
+  <div class="mbox" style="width:min(560px,94vw)">
+    <div class="mtitle" id="dep-title">Deploy factory state</div>
+    <div class="mnote">target: <b id="dep-target"></b> — pick the baseline to reconcile against the target's
+      <b>latest report</b>. Missing catalog apps get vendor-current installers (no pinned versions); apps present
+      but NOT in the baseline get uninstalled — protected entries and the agent itself are never touched.</div>
+    <select id="dep-src" onchange="depPreview()" style="width:100%;margin:8px 0"></select>
+    <div id="dep-body" style="line-height:1.7;font-size:13px"></div>
+    <div class="mrow">
+      <button class="mbtn" onclick="closeDeploy()">cancel</button>
+      <button class="mbtn dang" id="dep-go" onclick="depGo()" disabled>deploy</button>
+    </div>
+  </div>
+</div>
 <script>
 // T35: any operator call answering 401 (no/expired session) bounces the page to the sign-in card.
 const _f0 = window.fetch;
@@ -321,6 +335,47 @@ function gotoCompliance(){
     setTimeout(() => tr.classList.remove('flash'), 2400);
   });
 }
+
+// T39: factory DEPLOY — preview the baseline-vs-target diff, then queue install_app /
+// remove_software jobs. Removals are destructive, so they get a second explicit confirm.
+let _depT = null, _depP = null;
+async function deployFactory(cid){
+  _depT = cid; _depP = null;
+  const es = await (await fetch('/api/factory-state')).json();
+  if(!Array.isArray(es) || !es.length){ alert('no factory baselines saved yet — press "factory" on a station first'); return; }
+  const sel = document.getElementById('dep-src');
+  sel.innerHTML = es.map(e =>
+    `<option value="${esc(e.entry_id)}">${esc(e.display_name || e.entry_id)} · ${(e.installed_apps||[]).length} apps${e.entry_id===cid?' (this station)':''}</option>`).join('');
+  if(es.some(e => e.entry_id === cid)) sel.value = cid;
+  document.getElementById('dep-target').textContent = _devById[cid]?.display_name || cid;
+  document.getElementById('dep-body').textContent = 'computing diff against the target\'s latest report…';
+  document.getElementById('dep-go').disabled = true;
+  document.getElementById('dep-go').textContent = 'deploy';
+  document.getElementById('dep-modal').hidden = false;
+  depPreview();
+}
+async function depPreview(){
+  const r = await (await fetch(`/api/factory-deploy-preview/${_depT}?source=${encodeURIComponent(document.getElementById('dep-src').value)}`)).json();
+  const el = document.getElementById('dep-body'), go = document.getElementById('dep-go');
+  if(r.ok === false){ el.innerHTML = `<span style="color:var(--bad)">${esc(r.error||'preview failed')}</span>`; go.disabled = true; return; }
+  _depP = r;
+  el.innerHTML = `<b>install ${r.installs.length}</b> (baseline, vendor-current installer): ${esc(r.installs.join(', ')||'—')}<br>` +
+    `<b>uninstall ${r.removals.length}</b> (present but not in baseline): ${esc(r.removals.join(', ')||'—')}` +
+    (r.not_auto_installable?.length ? `<br><span style="color:var(--warn)">⚠ not auto-installable — no vendor installer in the catalog, flag stays on the row: ${esc(r.not_auto_installable.join(', '))}</span>` : '');
+  go.disabled = !(r.installs.length || r.removals.length);
+  go.textContent = `deploy ${r.installs.length + r.removals.length} job(s)`;
+}
+async function depGo(){
+  if(_depP?.removals?.length &&
+     !confirm(`Factory reset will UNINSTALL ${_depP.removals.length} app(s) on this station that are not in the baseline:\n\n• ${_depP.removals.join('\n• ')}`)) return;
+  const r = await api('/api/factory-deploy/' + _depT, { source_client_id: document.getElementById('dep-src').value });
+  if(!r || r.ok === false){ document.getElementById('dep-body').innerHTML = `<span style="color:var(--bad)">${esc((r&&r.error)||'deploy failed')}</span>`; return; }
+  document.getElementById('dep-body').textContent =
+    `${r.queued_jobs.length} job(s) queued${r.deduped ? ` — ${r.deduped} already open, skipped` : ''}. Watch progress in the row's job lines.`;
+  document.getElementById('dep-go').disabled = true;
+  refresh();
+}
+function closeDeploy(){ document.getElementById('dep-modal').hidden = true; _depT = _depP = null; }
 
 let _devById = {};
 // Offboarding is permanent (identity tombstoned), so a bare confirm() is too easy to blow through:
@@ -490,6 +545,7 @@ async function refresh(){
         <button class="btn" ${dev.online?'':'disabled'} onclick="locate('${dev.client_id}')">locate</button>
         <button class="btn" onclick="printLabel('${dev.client_id}')">label</button>
         <button class="btn" title="Pull this station's factory baseline — saves its name plus every installed app NAME (no versions; the updates manager owns those). The saved snapshot shows under factory in the header; pulling again replaces it" onclick="saveFactory('${dev.client_id}')">factory</button>
+        ${d.factory_entries ? `<button class="btn" title="Deploy a saved factory baseline onto this station — preview first: missing catalog apps install (vendor-current), apps not in the baseline uninstall (protected + the agent never). True factory reset" onclick="deployFactory('${dev.client_id}')">deploy</button>` : ''}
         <button class="btn" ${dev.online&&!inst?'':'disabled'} title="${inst?'install running — '+instTxt+' done':'Install ALL pending Windows updates on this station now — full-screen overlay on the PC, station held downed until the install ends, auto-reboot only if Windows Update demands it'}" onclick="installUpdates('${dev.client_id}')">${inst?`installing ${instTxt}`:'updates'}</button>
         <button class="btn" ${dev.online?'':'disabled'} title="Just poll Windows Update for a fresh pending count (no install)" onclick="scanUpdates('${dev.client_id}')">re-scan</button>
         ${dev.wallpaper_drift?`<button class="btn yel" ${dev.online?'':'disabled'} title="Desktop wallpaper on this PC no longer matches the enforced image — the agent re-verifies and re-applies it on its next beat" onclick="syncWallpaper('${dev.client_id}')">sync</button>`:''}

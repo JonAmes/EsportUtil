@@ -198,3 +198,28 @@ to the Device Fleet section where each affected row offers `clear`.
 - **data_dir resolution** (T37): a RELATIVE `data_dir` in `esportsutil.config.json` binds to the
   config FILE's directory, never the launch CWD; the self-update handoff relaunches with
   WorkingDirectory = the EXE's folder. Absolute `data_dir` (wizard default) is untouched.
+
+## 🚀 10. Factory Deploy — pushing a baseline ONTO a machine (§deploy — T39)
+
+`GET /api/factory-deploy-preview/{clientId}?source=<entry_id>` and
+`POST /api/factory-deploy/{clientId}` with body `{ "source_client_id": "<entry_id>" | null }`.
+
+The server diffs the baseline's `installed_apps` (T36: **names only**, no versions) against the
+target's **last full report** `machine_state.installedApps` and expands it into jobs the agent
+already executes — no new agent verbs:
+
+- **Missing + in the venue AppCatalog** → `install_app` job; the installer is the vendor's
+  current download (the updates manager owns version currency; baselines never pin versions).
+- **Missing + NOT in the catalog** → returned as `not_auto_installable`; nothing is guessed and
+  the compliance flag keeps speaking on the row.
+- **Present but not in the baseline** → `remove_software` job — a **true factory reset** (operator
+  decision, T39). Guardrails: entries matching a policy `Protected` rule and anything named
+  *esportsutil* (the agent itself) are never removed.
+- Open jobs are **deduped** — re-deploying a running reconcile queues nothing new.
+- `source_client_id` omitted = the target's **own** baseline (self-reconcile); a named source =
+  template copy from any station that has a saved baseline.
+- 404s: unknown device, no baseline for the source, or a target that has not sent a first report.
+
+Dashboard: a per-row `deploy` button (visible once any baseline exists) opens a modal showing the
+exact install/uninstall diff before anything runs; destructive removals additionally require an
+explicit confirm listing every app that will be uninstalled.

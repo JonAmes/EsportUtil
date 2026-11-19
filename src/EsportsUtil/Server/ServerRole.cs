@@ -251,6 +251,100 @@ public static class ServerRole
             return Results.Json(new { ok = true, entry_id = clientId, installed_apps = apps.Count }, Wire.Options);
         });
 
+        // T39: factory DEPLOY (user: "So now I have no way to deploy a factory state on to a machine.").
+        // Diff a saved baseline (optionally from ANOTHER station — template copy) against the target's
+        // last full report and queue jobs the agent already executes: install_app for baseline names
+        // present in the venue catalog (vendor-current installers — updates manager owns versions),
+        // remove_software for extras (true factory reset, operator decision), policy-protected and the
+        // agent itself are never removed; names outside the catalog are reported, not guessed.
+        (int rc, object body) FactoryDiff(string clientId, string? sourceId, bool apply)
+        {
+            if (!registry.Exists(clientId))
+                return (404, new AckEnvelope(false, "unknown device"));
+            var master = manifests.LoadMaster();
+            var src = master.FactoryStateMap?.FirstOrDefault(f => f.EntryId == (sourceId ?? clientId));
+            if (src is null)
+                return (404, new AckEnvelope(false, "no factory baseline for that source — press the 'factory' button on a station first"));
+            if (src.InstalledApps is not { Count: > 0 })
+                return (400, new AckEnvelope(false, "that baseline carries no installed-app list — re-pull it with the factory button"));
+            var lm = manifests.LoadReport(clientId);
+            if (lm is null)
+                return (404, new AckEnvelope(false, "target has not sent a full report yet — wait for its first scan"));
+
+            var present = new List<(string Name, string? Publisher)>();
+            if (lm.MachineState?["installedApps"] is JsonArray arr)
+                foreach (var a in arr)
+                    if (a?["display_name"]?.GetValue<string>() is { Length: > 0 } dn &&
+                        !present.Any(p => p.Name.Equals(dn, StringComparison.OrdinalIgnoreCase)))
+                        present.Add((dn, a?["publisher"]?.GetValue<string>()));
+
+            var installs = new List<(string Name, string AppId)>();
+            var notInstallable = new List<string>();
+            foreach (var name in src.InstalledApps)
+                if (!present.Any(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var cat = AppCatalog.All.FirstOrDefault(c =>
+                        c.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+                        c.Id.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (cat is null) notInstallable.Add(name);
+                    else installs.Add((cat.Name, cat.Id));
+                }
+            var policy = manifests.LoadPolicy();
+            var removals = present
+                .Where(p => !src.InstalledApps!.Contains(p.Name, StringComparer.OrdinalIgnoreCase))
+                .Where(p => !p.Name.Contains("esportsutil", StringComparison.OrdinalIgnoreCase))  // never saw off the agent
+                .Where(p => !policy.Protected.Any(r => Comparator.RuleMatches(r, p.Name, p.Publisher)))
+                .Select(p => p.Name).ToList();
+
+            var baseBody = new
+            {
+                ok = true,
+                source = src.EntryId,
+                target = clientId,
+                installs = installs.Select(x => x.Name).ToList(),
+                install_ids = installs.Select(x => x.AppId).ToList(),
+                removals,
+                not_auto_installable = notInstallable,
+            };
+            if (!apply) return (200, baseBody);
+
+            var queued = new List<string>();
+            var deduped = 0;
+            foreach (var (name, appId) in installs)
+                if (jobs.HasOpen(clientId, "install_app", appId)) deduped++;
+                else { jobs.Enqueue(clientId, "install_app", appId, null, null); queued.Add($"install_app {name}"); }
+            foreach (var name in removals)
+                if (jobs.HasOpen(clientId, "remove_software", name)) deduped++;
+                else { jobs.Enqueue(clientId, "remove_software", name, null, null); queued.Add($"remove_software {name}"); }
+
+            var pin = registry.Snapshot().FirstOrDefault(x => x.ClientId == clientId)?.DevicePin;
+            _ = hub.PublishAsync(new Alert("factory_deploy_queued", removals.Count > 0 ? "warn" : "info",
+                $"factory deploy from baseline '{src.EntryId}': {queued.Count} job(s) queued, {deduped} deduped" +
+                (notInstallable.Count > 0 ? $", {notInstallable.Count} not auto-installable" : ""),
+                clientId, pin, DateTimeOffset.UtcNow));
+            return (200, new
+            {
+                ok = true,
+                source = src.EntryId,
+                target = clientId,
+                installs = installs.Select(x => x.Name).ToList(),
+                removals,
+                not_auto_installable = notInstallable,
+                deduped,
+                queued_jobs = queued,
+            });
+        }
+        app.MapGet("/api/factory-deploy-preview/{clientId}", (string clientId, string? source) =>
+        {
+            var (rc, body) = FactoryDiff(clientId, source, false);
+            return Results.Json(body, Wire.Options, statusCode: rc);
+        });
+        app.MapPost("/api/factory-deploy/{clientId}", (string clientId, FactoryDeployRequest? req) =>
+        {
+            var (rc, body) = FactoryDiff(clientId, req?.SourceClientId, true);
+            return Results.Json(body, Wire.Options, statusCode: rc);
+        });
+
         // T36: "clear" silences THIS station's current findings by (kind, subject) key — chips,
         // pill and the compliance alert go quiet. "restore" lifts every dismissal; if the condition
         // is still true the comparator immediately speaks again. New findings never auto-clear.
