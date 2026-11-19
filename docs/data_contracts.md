@@ -296,3 +296,12 @@ server now SKIPS such a station at queue time with reason "agent X too old for t
 optimistic (the agent's own unknown-job-kind refusal is the backstop). Report summaries (agent
 version + game counts) are hydrated from stored reports at server startup so the version chip and
 the gate survive a restart without waiting for each station to re-report.
+
+## 🔒 15. One app at a time per station (§one-job — T45)
+A station runs at most ONE job in flight. `JobStore.NextQueued` returns nothing while that
+client has a `running` job; abandoned runs are still swept by the timeout sweep, so the queue
+cannot stall. On the agent, a machine work gate (SemaphoreSlim 1,1) serializes job execution,
+the self-update handoff defers while any job runs (no restart can orphan a running SteamCMD),
+and before launching SteamCMD the agent waits out any foreign `steamcmd` process (bounded by
+`job_timeout_min`) — two concurrent SteamCMDs collide on Steam's content platform and both die
+with the opaque `steamcmd exit 7` (connection error).
