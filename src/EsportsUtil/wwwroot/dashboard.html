@@ -104,6 +104,7 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
 .cchip{display:inline-block;font-size:11px;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid var(--hair);border-radius:999px;white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;background:color-mix(in srgb,var(--fg) 3%,transparent)}
 .cchip.up{color:var(--info)} .cchip.rb,.cchip.un{color:var(--bad)} .cchip.mi,.cchip.ung{color:var(--mut)} .cchip.ok{color:var(--ok)}
 .cchip.act{cursor:pointer;border-style:dashed} .cchip.act:hover{border-color:var(--acc);color:var(--acc)}
+.cchip .car{opacity:.55;font-size:10px}          /* T38 collapse caret on the summary pill */
 .jobline{font-size:11px;color:var(--mut);margin-top:3px;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .jobline.succeeded{color:var(--ok)} .jobline.failed{color:var(--bad)} .jobline.running{color:var(--info)}
 #jobstat{font-size:12px;min-height:16px;margin:6px 2px}
@@ -151,7 +152,7 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
     <span class="chip" id="c-user" hidden title="signed-in operator — click to sign out" style="cursor:pointer"></span>
     <span class="chip">manifest <b id="c-manifest">–</b></span>
     <span class="chip mono">factory <b id="c-factory">–</b> entries</span>
-    <span class="pill warn" id="c-compliance" hidden style="cursor:pointer;font-size:12px;padding:4px 12px" title="compliance findings across the fleet — click to jump to the stations below" onclick="gotoCompliance()">⚠ <b id="c-issues">0</b> compliance</span>
+    <span class="pill warn" id="c-compliance" hidden style="cursor:pointer;font-size:12px;padding:4px 12px" title="compliance findings across the fleet — click to expand every affected station and jump below" onclick="gotoCompliance()">⚠ <b id="c-issues">0</b> compliance</span>
     <a class="chip" href="/settings" style="text-decoration:none;color:var(--acc)">settings</a>
     <span class="live"><span class="dot ok" id="c-live-dot"></span> <span id="c-live">server online</span> · <span id="clock">…</span></span>
   </div>
@@ -298,7 +299,21 @@ async function saveFactory(cid){
   el.style.color = ok ? 'var(--ok)' : 'var(--bad)';
   refresh();
 }
+// T38: one collapsed findings pill per station; click toggles the detail chips inline.
+// The open set survives re-renders (auto-refresh rebuilds every row every few seconds).
+const _fxOpen = new Set();
+function toggleFindings(cid){
+  const b = document.getElementById('fx-' + cid), p = document.getElementById('fp-' + cid);
+  if (!b) return;
+  const open = b.hidden;
+  b.hidden = !open;
+  if (open) _fxOpen.add(cid); else _fxOpen.delete(cid);
+  if (p) { const c = p.querySelector('.car'); if (c) c.textContent = open ? '▾' : '▸'; }
+}
 function gotoCompliance(){
+  // T38: the header pill also expands every affected station, so the jump lands on detail.
+  Object.keys(_devById).forEach(cid => { if ((_devById[cid].issues || []).length) _fxOpen.add(cid); });
+  refresh();
   document.getElementById('fleet').scrollIntoView({behavior:'smooth', block:'start'});
   document.querySelectorAll('#rows tr').forEach(tr => {
     if(!tr.querySelector('.cchip:not(.ok)')) return;
@@ -429,11 +444,17 @@ async function refresh(){
     const dupNote = dev.duplicates ? `<div class="sub2">${dev.duplicates} duplicate game id(s) awaiting server resolution</div>` : '';
     const kindCls = {update_required:'up', rollback_required:'rb', missing_from_machine:'mi', unmanaged_game:'ung', unapproved_app:'un', duplicate_resolved:'up'};
     const kindLbl = {update_required:'↑', rollback_required:'↓', missing_from_machine:'＋', unmanaged_game:'?', unapproved_app:'⚠', duplicate_resolved:'dup'};
+    // T38: findings collapse to ONE pill per station; the click expands the detailed, still-
+    // actionable chips inline. Expansion is remembered across auto-refreshes.
+    const chipList = issues.map(i => {
+        const fix = FIXABLE[i.kind] && !(i.kind === 'unapproved_app' && i.protected);
+        return `<span class="cchip ${kindCls[i.kind]||'ung'}${fix?' act':''}"${fix?` onclick="fixJob('${dev.client_id}','${FIXABLE[i.kind]}','${encodeURIComponent(i.subject)}')"`:` title="${esc(i.kind)}: ${esc(i.subject)}"`}>${kindLbl[i.kind]||i.kind} ${esc(i.subject)}</span>`;
+      }).join('');
+    const open = _fxOpen.has(dev.client_id);
+    const sumCls = issues.some(i => ['rollback_required','unapproved_app'].includes(i.kind)) ? 'rb'
+      : issues.some(i => ['update_required','duplicate_resolved'].includes(i.kind)) ? 'up' : 'ung';
     const chips = issues.length
-      ? issues.map(i => {
-          const fix = FIXABLE[i.kind] && !(i.kind === 'unapproved_app' && i.protected);
-          return `<span class="cchip ${kindCls[i.kind]||'ung'}${fix?' act':''}"${fix?` onclick="fixJob('${dev.client_id}','${FIXABLE[i.kind]}','${encodeURIComponent(i.subject)}')"`:` title="${esc(i.kind)}: ${esc(i.subject)}"`}>${kindLbl[i.kind]||i.kind} ${esc(i.subject)}</span>`;
-        }).join('')
+      ? `<span class="cchip ${sumCls} act" id="fp-${dev.client_id}" title="${issues.length} finding(s) — click to ${open?'collapse':'expand'}: ${esc(issues.map(i => (kindLbl[i.kind]||i.kind)+' '+i.subject).join(' · '))}" onclick="toggleFindings('${dev.client_id}')">⚠ ${issues.length} finding${issues.length===1?'':'s'} <span class="car">${open?'▾':'▸'}</span></span><span id="fx-${dev.client_id}"${open?'':' hidden'}> ${chipList}</span>`
       : (dev.games ? '<span class="cchip ok">✓ in sync</span>' : '<span style="color:var(--mut)">—</span>');
     const clearBtn = issues.length
       ? `<span class="cchip act" style="border-style:dashed" title="clear ALL current findings for this station — they stay silenced until you restore them; new findings still speak up" onclick="clearIssues('${dev.client_id}')">clear</span>`

@@ -1438,6 +1438,17 @@ Check(t36Schema.Contains("\"installed_apps\"") && t36Schema.Contains("names only
             "T37g relative data_dir binds to the config FILE, never the launch CWD");
         Check(Identity.LoadOrCreate(c9.DataDir).ClientId == m1.ClientId,
             "T37h the config-bound data dir carries the same machine identity");
+
+        // ---------- T38: per-station findings collapse into ONE pill (user: "Lets collaps all the game pills into one pill") ----------
+        var dash9 = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "EsportsUtil", "wwwroot", "dashboard.html")));
+        Check(dash9.Contains("function toggleFindings(") && dash9.Contains("_fxOpen")
+            && dash9.Contains("finding${issues.length===1?'':'s'}") && dash9.Contains("id=\"fx-${dev.client_id}\""),
+            "T38a one summary findings pill per station (count + caret); detail chips sit in a hidden expandable box");
+        Check(dash9.Contains("onclick=\"fixJob('${dev.client_id}'") && dash9.Contains("onclick=\"clearIssues('${dev.client_id}')\"")
+            && dash9.IndexOf("onclick=\"clearIssues") > dash9.IndexOf("id=\"fx-${dev.client_id}\""),
+            "T38b collapse loses nothing: fixJob actions survive inside the box; clear/restore stay outside it");
+        Check(dash9.Contains("_fxOpen.add(cid)") && dash9.Contains("scrollIntoView({behavior:'smooth'"),
+            "T38c header compliance pill expands every affected station, then jumps to #fleet");
     }
     finally { Environment.SetEnvironmentVariable("ESU_HW_SEED", prevSeed); }
 }
