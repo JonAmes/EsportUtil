@@ -305,3 +305,10 @@ the self-update handoff defers while any job runs (no restart can orphan a runni
 and before launching SteamCMD the agent waits out any foreign `steamcmd` process (bounded by
 `job_timeout_min`) — two concurrent SteamCMDs collide on Steam's content platform and both die
 with the opaque `steamcmd exit 7` (connection error).
+
+**Resume-retry (§one-job — T45b, v0.5.17):** a failed SteamCMD exit code in {7 connection, 8 SUSPEND,
+12 unavailable, 26 remote-disconnect} is transient — the agent re-runs `app_update <appid> validate`
+(up to 4 attempts, 20s×attempt backoff), which resumes the partial download. Exit 8 typically means
+the station's own Steam client preempted steamcmd's download; the backoff gives Steam its turn. Other
+codes (disk, license, corruption) fail immediately. Final failure text: `steamcmd exit N (still
+interrupted after 4 resume attempts — check station network/Steam client)`.
