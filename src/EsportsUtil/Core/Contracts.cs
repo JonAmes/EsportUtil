@@ -96,7 +96,11 @@ public sealed record FactoryEntry(
     DateTimeOffset CapturedTimestamp,
     List<GameBaseline> GameBaselines,
     JsonNode MachineState,
-    List<ContentRef>? ContentRefs = null);
+    List<ContentRef>? ContentRefs = null,
+    // T36: operator-pulled factory baseline — the station's name + every installed app NAME.
+    // Deliberately NO version numbers: keeping apps current is the updates manager's job.
+    string? DisplayName = null,
+    List<string>? InstalledApps = null);
 
 public sealed record MasterManifest(
     int Version,
@@ -115,6 +119,10 @@ public sealed record ContentManifest(int Version, DateTimeOffset UpdatedTimestam
 public sealed record LoginRequest(string Username, string Password);
 public sealed record OperatorAddRequest(string Username, string Password);
 public sealed record OperatorPasswordRequest(string Username, string Password);
+
+// ---- T36: compliance dismissals ----
+
+public sealed record IssueActionRequest(string ClientId);
 
 public static class Wire
 {

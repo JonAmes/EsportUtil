@@ -158,3 +158,27 @@ server answers one JSON datagram:
 `{service:"esportsutil", server_url:"http://<reachable>:4300", version:"x.y.z"}`.
 A wildcard-bound server advertises the address of the very interface the probe
 arrived on, so multi-NIC boxes answer each requester with a directly reachable URL.
+
+## 🏭 8. Factory Baselines & Compliance Dismissals (§factory — T36)
+
+**Factory baseline pull** — the dashboard's per-station `factory` button calls
+`POST /api/factory-state/{clientId}` (operator-side; agent does nothing new).
+The server snapshots the station's registry NAME plus the installed application
+**names** from its last full report (`<data>/reports/<clientId>.json`, field
+`machine_state.installedApps[].display_name`) into the master manifest's
+`factory_state_map` (one entry per `client_id`; re-pull REPLACES). `404` if the
+device is unknown or has never sent a full report.
+**Version numbers are deliberately NOT part of a factory baseline** — the
+updates manager owns currency; a baseline is a *what was on the box when it was
+born* manifest (`display_name`, `installed_apps: [string…]`).
+
+**Compliance dismissals** — per-station `clear` calls `POST /api/issues/clear
+{client_id}` and silences *all current findings* for that station; dismissals
+persist in `<data>/issue-dismissals.json` keyed `(client_id, kind, subject)`
+and stay armed across restarts until `POST /api/issues/restore {client_id}`
+lifts them (findings return iff still true). A changed/renamed finding is a new
+key and speaks again on its own. Dismissed findings are excluded from the
+`/api/state` device `issues` array (the row shows `N cleared ↺` instead) and
+never (re-)fire the `compliance` alert. The dashboard header shows ONE orange
+pill `⚠ N issues` (replaces the old out-of-sync stat tile); clicking it jumps
+to the Device Fleet section where each affected row offers `clear`.

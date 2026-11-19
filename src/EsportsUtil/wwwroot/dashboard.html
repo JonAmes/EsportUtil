@@ -41,7 +41,7 @@ h1{font-size:18px;font-weight:590;letter-spacing:-.4px;margin:0}
 @keyframes pulse{50%{box-shadow:0 0 0 6px transparent}}
 
 /* stat cards */
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0 18px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0 18px}
 .stat{background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:12px 14px 10px;position:relative;overflow:hidden}
 .stat::before{content:"";position:absolute;inset:0 auto auto 0;width:100%;height:2px;background:linear-gradient(90deg,var(--tint,var(--acc)),transparent 70%)}
 .stat .l{color:var(--mut);font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;display:flex;align-items:center;gap:6px}
@@ -91,6 +91,7 @@ td:first-child{min-width:240px}
 .sw[aria-checked="true"]::after{left:18px;background:var(--fg)}
 .pill.dn{color:var(--mut);border-style:dashed;border-color:color-mix(in srgb,var(--fg) 35%,transparent);background:color-mix(in srgb,var(--fg) 5%,transparent)}
 .pill[hidden]{display:none}
+tr.flash td{background:color-mix(in srgb,var(--warn) 12%,transparent);transition:background .4s}
 tr.downed td{opacity:.55}
 tr.downed td:last-child,tr.downed td.swcell{opacity:1}
 tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
@@ -150,6 +151,7 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
     <span class="chip" id="c-user" hidden title="signed-in operator — click to sign out" style="cursor:pointer"></span>
     <span class="chip">manifest <b id="c-manifest">–</b></span>
     <span class="chip mono">factory <b id="c-factory">–</b> entries</span>
+    <span class="pill warn" id="c-compliance" hidden style="cursor:pointer;font-size:12px;padding:4px 12px" title="compliance findings across the fleet — click to jump to the stations below" onclick="gotoCompliance()">⚠ <b id="c-issues">0</b> compliance</span>
     <a class="chip" href="/settings" style="text-decoration:none;color:var(--acc)">settings</a>
     <span class="live"><span class="dot ok" id="c-live-dot"></span> <span id="c-live">server online</span> · <span id="clock">…</span></span>
   </div>
@@ -160,12 +162,6 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
       <div class="n" id="c-agents">–</div>
       <div class="d" id="c-agents-d">of – registered</div>
       <svg width="56" height="18" viewBox="0 0 56 18"><polyline points="0,14 8,12 16,13 24,9 32,10 40,6 48,7 56,4" fill="none" stroke="#10b981" stroke-width="1.5"/></svg>
-    </div>
-    <div class="stat s-warn">
-      <div class="l"><span class="dot warn"></span>out-of-sync games</div>
-      <div class="n" id="c-issues">–</div>
-      <div class="d" id="c-issues-d">compliance findings</div>
-      <svg width="56" height="18" viewBox="0 0 56 18"><polyline points="0,10 8,9 16,12 24,8 32,10 40,7 48,9 56,6" fill="none" stroke="#d97706" stroke-width="1.5"/></svg>
     </div>
     <div class="stat s-bad">
       <div class="l"><span class="dot bad"></span>agent down</div>
@@ -181,7 +177,7 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
     </div>
   </div>
 
-  <div class="sec">
+  <div class="sec" id="fleet">
     <div class="sec-h"><span class="t">Device Fleet</span><span class="rule"></span><span class="chip mono">PIN system</span></div>
     <table>
       <thead><tr>
@@ -278,6 +274,39 @@ async function installUpdates(cid){ if(!confirm('Install ALL pending Windows upd
 async function selfUpdate(cid){ const r = await api('/api/self-update/'+cid, {}); if(r && r.ok===false) alert(r.error||'unknown device'); refresh(); }
 async function syncWallpaper(cid){ await api('/api/sync-wallpaper/'+cid, {}); refresh(); }
 
+// T36: compliance clear/restore + operator-pulled factory baseline + pill → fleet jump.
+async function clearIssues(cid){
+  if(!confirm('Clear ALL current compliance findings on this station?\n\nThey stay silenced until you click "cleared ↺" to restore them — new findings still speak up.')) return;
+  const r = await api('/api/issues/clear', {client_id: cid});
+  const el = document.getElementById('jobstat');
+  el.textContent = r && r.ok ? `compliance cleared for this station (${r.cleared} finding(s) dismissed)` : `clear failed: ${(r&&r.error)||'server error'}`;
+  el.style.color = r && r.ok ? 'var(--ok)' : 'var(--bad)';
+  refresh();
+}
+async function restoreIssues(cid){
+  const r = await api('/api/issues/restore', {client_id: cid});
+  const el = document.getElementById('jobstat');
+  el.textContent = r && r.ok ? `restored ${r.restored} dismissal(s) — findings return if still true` : `restore failed: ${(r&&r.error)||'server error'}`;
+  el.style.color = r && r.ok ? 'var(--ok)' : 'var(--bad)';
+  refresh();
+}
+async function saveFactory(cid){
+  const r = await api('/api/factory-state/'+cid, {});
+  const el = document.getElementById('jobstat');
+  const ok = r && r.ok === true;
+  el.textContent = ok ? `factory baseline saved — ${r.installed_apps} installed app name(s); versions left to the updates manager` : `factory pull failed: ${(r&&r.error)||'server error'}`;
+  el.style.color = ok ? 'var(--ok)' : 'var(--bad)';
+  refresh();
+}
+function gotoCompliance(){
+  document.getElementById('fleet').scrollIntoView({behavior:'smooth', block:'start'});
+  document.querySelectorAll('#rows tr').forEach(tr => {
+    if(!tr.querySelector('.cchip:not(.ok)')) return;
+    tr.classList.add('flash');
+    setTimeout(() => tr.classList.remove('flash'), 2400);
+  });
+}
+
 let _devById = {};
 // Offboarding is permanent (identity tombstoned), so a bare confirm() is too easy to blow through:
 // a modal requires the station's 4-digit PIN to be RE-TYPED before the call fires.
@@ -373,10 +402,10 @@ async function refresh(){
   document.getElementById('c-ver').textContent = 'v' + (d.server_version || '?');
   document.getElementById('c-factory').textContent = d.factory_entries;
 
-  const fixable = d.devices.reduce((n, x) => n + ((x.issues||[]).filter(i => FIXABLE[i.kind]).length), 0);
-  const fixPcs = d.devices.filter(x => (x.issues||[]).some(i => FIXABLE[i.kind])).length;
+  const fixable = d.devices.reduce((n, x) => n + ((x.issues||[]).length), 0);
+  const cp = document.getElementById('c-compliance');
+  cp.hidden = fixable === 0;   // T36: ONE orange pill replaces the old warn stat tile
   document.getElementById('c-issues').textContent = fixable;
-  document.getElementById('c-issues-d').textContent = fixPcs ? `${fixPcs} PC(s) · chips queue fixes` : 'all games in sync';
   const down = d.devices.filter(x => !x.online);
   document.getElementById('c-down').textContent = down.length;
   document.getElementById('c-down-d').textContent = down.length ? down.map(x => x.display_name || 'PIN ' + x.device_pin).slice(0, 2).join(', ') : 'all agents reporting';
@@ -406,6 +435,12 @@ async function refresh(){
           return `<span class="cchip ${kindCls[i.kind]||'ung'}${fix?' act':''}"${fix?` onclick="fixJob('${dev.client_id}','${FIXABLE[i.kind]}','${encodeURIComponent(i.subject)}')"`:` title="${esc(i.kind)}: ${esc(i.subject)}"`}>${kindLbl[i.kind]||i.kind} ${esc(i.subject)}</span>`;
         }).join('')
       : (dev.games ? '<span class="cchip ok">✓ in sync</span>' : '<span style="color:var(--mut)">—</span>');
+    const clearBtn = issues.length
+      ? `<span class="cchip act" style="border-style:dashed" title="clear ALL current findings for this station — they stay silenced until you restore them; new findings still speak up" onclick="clearIssues('${dev.client_id}')">clear</span>`
+      : '';
+    const clearedChip = (dev.cleared_issues || 0) > 0
+      ? `<span class="cchip" style="opacity:.6" title="${dev.cleared_issues} finding(s) cleared by operator — click to restore; they return if still true" onclick="restoreIssues('${dev.client_id}')">${dev.cleared_issues} cleared ↺</span>`
+      : '';
     const jobs = (dev.jobs || []).slice(0,3).map(j =>
       `<div class="jobline ${j.state}" title="${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}">${esc(j.kind)} · ${esc(j.subject)} · ${j.state}${j.detail?` — ${esc(j.detail)}`:''}${j.progress!=null?` · ${j.progress}%`:''}</div>`).join('');
     // T30: the agent's own GitHub release, when newer: one chip pushes the self_update directive.
@@ -424,7 +459,7 @@ async function refresh(){
       <td class="mono">${dev.games ?? '—'}${dev.installed_apps && dev.installed_apps.length
         ? `<div style="margin-top:5px"><span class="cchip act" title="installed applications the agent read from the Windows registry — click to browse" onclick="openApps('${dev.client_id}')">${dev.installed_apps.length} apps</span></div>`
         : ''}</td>
-      <td style="max-width:340px">${chips}${appChips}${suChip}${jobs}</td>
+      <td style="max-width:340px">${chips}${clearedChip}${clearBtn}${appChips}${suChip}${jobs}</td>
       <td>
         <span class="pill ${inst?'yel':dn?'':up?'yel':'ok'}" ${(dn&&!inst)?'hidden':''} title="${inst?`Windows Update install running — ${instTxt} done; station held down while updates install; the PC shows a full-screen overlay`:up?`${dev.wu_pending} Windows update${dev.wu_pending===1?'':'s'} pending — last poll ${wuAgo(dev.wu_scan_min_ago)}`:'Windows updates: none pending'}">${inst?`${instTxt} installing`:up?`${dev.wu_pending} update${dev.wu_pending===1?'':'s'}`:'active'}</span>
         <span class="pill dn" ${dn?'':'hidden'}>${dev.online?'downed':'downed · queued'}</span>
@@ -433,6 +468,7 @@ async function refresh(){
       <td>
         <button class="btn" ${dev.online?'':'disabled'} onclick="locate('${dev.client_id}')">locate</button>
         <button class="btn" onclick="printLabel('${dev.client_id}')">label</button>
+        <button class="btn" title="Pull this station's factory baseline — saves its name plus every installed app NAME (no versions; the updates manager owns those). The saved snapshot shows under factory in the header; pulling again replaces it" onclick="saveFactory('${dev.client_id}')">factory</button>
         <button class="btn" ${dev.online&&!inst?'':'disabled'} title="${inst?'install running — '+instTxt+' done':'Install ALL pending Windows updates on this station now — full-screen overlay on the PC, station held downed until the install ends, auto-reboot only if Windows Update demands it'}" onclick="installUpdates('${dev.client_id}')">${inst?`installing ${instTxt}`:'updates'}</button>
         <button class="btn" ${dev.online?'':'disabled'} title="Just poll Windows Update for a fresh pending count (no install)" onclick="scanUpdates('${dev.client_id}')">re-scan</button>
         ${dev.wallpaper_drift?`<button class="btn yel" ${dev.online?'':'disabled'} title="Desktop wallpaper on this PC no longer matches the enforced image — the agent re-verifies and re-applies it on its next beat" onclick="syncWallpaper('${dev.client_id}')">sync</button>`:''}

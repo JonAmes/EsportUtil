@@ -49,6 +49,7 @@ public static class ServerRole
         ops.BootstrapFromConfig(cfg);
         var sessions = new SessionStore();
         var loginGuard = new LoginGuard();
+        var dismissals = new DismissalsStore(cfg.DataDir);   // T36: cleared compliance findings
 
         builder.Services.AddHostedService(_ => new LivenessMonitor(registry, hub, cfg.HeartbeatTimeoutSec));
         builder.Services.AddHostedService(sp => new DiscoveryResponder(cfg,
@@ -214,6 +215,66 @@ public static class ServerRole
 
         // ---- factory state pull ----
         app.MapGet("/api/factory-state", () => Results.Json(manifests.LoadMaster().FactoryStateMap, Wire.Options));
+
+        // T36: operator pulls an enrolled machine's factory state — its saved name plus every
+        // installed app NAME from the last full report. Versions are deliberately NOT captured:
+        // keeping apps current is the updates manager's job. Re-pull replaces the entry.
+        app.MapPost("/api/factory-state/{clientId}", (string clientId) =>
+        {
+            var entry = registry.Snapshot().FirstOrDefault(e => e.ClientId == clientId);
+            if (entry is null)
+                return Results.Json(new AckEnvelope(false, "unknown client"), Wire.Options, statusCode: 404);
+            var lm = manifests.LoadReport(clientId);
+            if (lm is null)
+                return Results.Json(new AckEnvelope(false, "that device has not sent a full report yet — wait for its first scan"),
+                    Wire.Options, statusCode: 404);
+
+            var apps = new List<string>();
+            if (lm.MachineState?["installedApps"] is JsonArray arr)
+                foreach (var a in arr)
+                    if (a?["display_name"]?.GetValue<string>() is { Length: > 0 } dn && !apps.Contains(dn))
+                        apps.Add(dn);
+
+            var fe = new FactoryEntry(clientId, clientId,
+                lm.MachineState?["machineModel"]?.GetValue<string>() ?? "unknown",
+                DateTimeOffset.UtcNow, new List<GameBaseline>(), lm.MachineState ?? new JsonObject(),
+                null, entry.DisplayName, apps);
+
+            var m0 = manifests.LoadMaster();
+            var map = new List<FactoryEntry>(m0.FactoryStateMap ?? new List<FactoryEntry>());
+            map.RemoveAll(x => x.EntryId == clientId);   // pull again = replace, never duplicate
+            map.Add(fe);
+            manifests.SaveMaster(m0 with { Version = m0.Version + 1, FactoryStateMap = map });
+            _ = hub.PublishAsync(new Alert("factory_state_saved", "info",
+                $"factory baseline saved for #{entry.DevicePin}: {apps.Count} installed app name(s)",
+                clientId, entry.DevicePin, DateTimeOffset.UtcNow));
+            return Results.Json(new { ok = true, entry_id = clientId, installed_apps = apps.Count }, Wire.Options);
+        });
+
+        // T36: "clear" silences THIS station's current findings by (kind, subject) key — chips,
+        // pill and the compliance alert go quiet. "restore" lifts every dismissal; if the condition
+        // is still true the comparator immediately speaks again. New findings never auto-clear.
+        app.MapPost("/api/issues/clear", (IssueActionRequest req) =>
+        {
+            if (DeviceState(req.ClientId) is not { } st)
+                return Results.Json(new AckEnvelope(false, "no report from that device"), Wire.Options, statusCode: 404);
+            dismissals.DismissAll(req.ClientId, st.issues, DateTimeOffset.UtcNow);
+            var pin = registry.Snapshot().FirstOrDefault(e => e.ClientId == req.ClientId)?.DevicePin;
+            _ = hub.PublishAsync(new Alert("compliance_cleared", "info",
+                $"{st.issues.Count} compliance finding(s) dismissed by operator",
+                req.ClientId, pin, DateTimeOffset.UtcNow));
+            return Results.Json(new { ok = true, cleared = st.issues.Count }, Wire.Options);
+        });
+
+        app.MapPost("/api/issues/restore", (IssueActionRequest req) =>
+        {
+            var n = dismissals.Restore(req.ClientId);
+            var pin = registry.Snapshot().FirstOrDefault(e => e.ClientId == req.ClientId)?.DevicePin;
+            _ = hub.PublishAsync(new Alert("compliance_restored", "info",
+                $"{n} dismissal(s) lifted — findings return if still true",
+                req.ClientId, pin, DateTimeOffset.UtcNow));
+            return Results.Json(new { ok = true, restored = n }, Wire.Options);
+        });
 
         // ---- T35: operator sign-in + account management ----
         app.MapPost("/api/login", (LoginRequest req, HttpContext ctx, HttpResponse res) =>
@@ -590,7 +651,10 @@ public static class ServerRole
             {
                 manifests.Summaries.TryGetValue(e.ClientId, out var sum);
                 var hbAgo = e.LastHeartbeat is null ? (double?)null : (now - e.LastHeartbeat.Value).TotalSeconds;
-                var issues = issuesByClient.TryGetValue(e.ClientId, out var iss) ? iss : new List<Issue>();
+                var found = issuesByClient.TryGetValue(e.ClientId, out var iss) ? iss : new List<Issue>();
+                // T36: operator dismissals silence findings; the count of cleared ones rides along
+                // so the row can show "N cleared ↺" and offer restore.
+                var issues = found.Where(i => !dismissals.IsDismissed(e.ClientId, i.Kind, i.Subject)).ToList();
                 return new
                 {
                     client_id = e.ClientId,
@@ -621,13 +685,16 @@ public static class ServerRole
                     last_report = sum?.ReportTimestamp,
                     locate_pending = e.PendingDirectives.Any(d => d.ExpiresUnix > now.ToUnixTimeSeconds()),
                     issues,
+                    cleared_issues = found.Count - issues.Count,
                     jobs = jobs.ForClient(e.ClientId),
                 };
             }).ToList();
 
             // Compliance alerting: publish once per device whenever its issue set changes.
-            foreach (var (cid, issues) in issuesByClient)
+            // T36: dismissed findings are NOT part of the issue set — clearing quiets the alert too.
+            foreach (var (cid, found) in issuesByClient)
             {
+                var issues = found.Where(i => !dismissals.IsDismissed(cid, i.Kind, i.Subject)).ToList();
                 var h = Comparator.Hash(issues);
                 if (issueHashes.TryGetValue(cid, out var old) && old == h) continue;
                 issueHashes[cid] = h;

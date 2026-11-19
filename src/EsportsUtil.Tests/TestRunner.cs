@@ -1307,6 +1307,99 @@ Check(t35Login.Contains("/api/login") && t35Dash.Contains("/login") && t35Dash.C
 Check(t35Set.Contains("/api/operators") && t35Set.Contains("add operator"),
     "T35x settings carries the operator management panel");
 
+// ---------- T36: factory-state pull + compliance dismissals ----------
+{
+    var port8 = 4391; var srvUrl8 = $"http://127.0.0.1:{port8}"; var srvDir8 = Path.Combine(tmp, "srv8");
+    var srvCfg8 = new EsportsConfig { Role = "server", ServerUrl = $"http://0.0.0.0:{port8}", DataDir = srvDir8 };
+    using var app8 = ServerRole.BuildApp(srvCfg8); await app8.StartAsync();
+    using var probe8 = new HttpClient { BaseAddress = new Uri(srvUrl8), Timeout = TimeSpan.FromSeconds(5) };
+    async Task<(int code, JsonNode json)> Api8(string path, object? body = null)
+    {
+        var r = await probe8.PostAsync(path, new StringContent(Wire.ToJson(body ?? new { }), System.Text.Encoding.UTF8, "application/json"));
+        var txt = await r.Content.ReadAsStringAsync();
+        return ((int)r.StatusCode, txt.Length > 0 ? JsonNode.Parse(txt)! : JsonNode.Parse("null")!);
+    }
+    async Task<JsonDoc> State8() => Wire.FromJson<JsonDoc>(await probe8.GetStringAsync("/api/state"))!;
+
+    var cid8 = "t36-" + Guid.NewGuid().ToString("N")[..8];
+    Check((await probe8.PostAsync("/api/register", new StringContent(Wire.ToJson(new RegisterRequest(cid8, "9911", "Vertex Prime X")), System.Text.Encoding.UTF8, "application/json"))).IsSuccessStatusCode,
+        "T36a station registers for the factory/compliance harness");
+    await Api8("/api/rename", new RenameRequest(cid8, "LAN-TEST-01", "Zone T"));
+    File.WriteAllText(Path.Combine(srvDir8, "ApprovedSoftwarePolicy.json"), Wire.ToJson(new ApprovedSoftwarePolicy(
+        1, DateTimeOffset.UtcNow, "report_only",
+        new List<SoftwareRule> { new("Steam") }, new List<SoftwareRule>())));
+    var ms8 = JsonNode.Parse("""
+        {"machineModel":"Vertex Prime X","installedApps":[
+          {"display_name":"Steam","publisher":"Valve"},
+          {"display_name":"Notepad++","publisher":"Notepad++ Team"},
+          {"display_name":"Discord","publisher":"Discord Inc."}]}
+        """)!;
+    Check((await Api8("/api/report", new LocalManifest(cid8, "9911", "LAN-TEST-01", DateTimeOffset.UtcNow,
+        AgentInfo.Version, ms8, new List<GameReport>()))).code == 200,
+        "T36b seeded full report with installedApps accepted");
+
+    var dev8 = (await State8()).devices.Single(x => x.client_id == cid8);
+    Check(dev8.issues.Count(i => i.kind == "unapproved_app") == 2 && (dev8.cleared_issues ?? 0) == 0,
+        "T36c policy flags Notepad++ + Discord; nothing cleared yet");
+
+    var (cc, cj) = await Api8("/api/issues/clear", new IssueActionRequest(cid8));
+    dev8 = (await State8()).devices.Single(x => x.client_id == cid8);
+    Check(cc == 200 && cj["ok"]!.GetValue<bool>() && cj["cleared"]!.GetValue<int>() == 2 &&
+          dev8.issues.Count == 0 && dev8.cleared_issues == 2,
+        "T36d clear silences every current finding; issues empty, cleared_issues rides to the UI");
+    Check(File.Exists(Path.Combine(srvDir8, "issue-dismissals.json")) &&
+          new EsportsUtil.Server.DismissalsStore(srvDir8).CountFor(cid8) == 2,
+        "T36e dismissals persist to <data>/issue-dismissals.json and reload on a fresh store");
+
+    var comps = (await State8()).alerts.Count(a => a.type == "compliance");
+    await Api8("/api/issues/clear", new IssueActionRequest(cid8));   // no-op re-clear
+    Check(comps == 1 && (await State8()).alerts.Count(a => a.type == "compliance") == 1 &&
+          (await State8()).alerts.Any(a => a.type == "compliance_cleared"),
+        "T36f compliance alert fired ONCE for the findings and re-clearing never re-alerts");
+
+    var (rcj, rjj) = await Api8("/api/issues/restore", new IssueActionRequest(cid8));
+    dev8 = (await State8()).devices.Single(x => x.client_id == cid8);
+    Check(rcj == 200 && rjj["restored"]!.GetValue<int>() == 2 &&
+          dev8.issues.Count(i => i.kind == "unapproved_app") == 2 && (dev8.cleared_issues ?? 0) == 0,
+        "T36g restore lifts the dismissals and the still-true findings speak again");
+
+    var (fc, fj) = await Api8("/api/factory-state/" + cid8);
+    var fentries = JsonNode.Parse(await probe8.GetStringAsync("/api/factory-state"))!.AsArray();
+    var fent = fentries.Single();
+    Check(fc == 200 && fj["ok"]!.GetValue<bool>() && fj["installed_apps"]!.GetValue<int>() == 3 &&
+          fentries.Count == 1 &&
+          fent["display_name"]!.GetValue<string>() == "LAN-TEST-01" &&
+          fent["entry_id"]!.GetValue<string>() == cid8 &&
+          fent["source_client_id"]!.GetValue<string>() == cid8 &&
+          fent["machine_model"]!.GetValue<string>() == "Vertex Prime X" &&
+          fent["installed_apps"]!.AsArray().Select(x => x!.GetValue<string>()).OrderBy(s => s)
+              .SequenceEqual(new[] { "Discord", "Notepad++", "Steam" }) &&
+          fent["installed_apps"]!.AsArray().All(x => x!.GetValueKind() == JsonValueKind.String),
+        "T36h factory pull saves NAME + every installed app NAME (strings only — no version numbers anywhere)");
+    await Api8("/api/factory-state/" + cid8);
+    Check(JsonNode.Parse(await probe8.GetStringAsync("/api/factory-state"))!.AsArray().Count == 1,
+        "T36i re-pull REPLACES the entry — no duplicate factory baselines");
+
+    var t36no = "t36noreport-" + Guid.NewGuid().ToString("N")[..8];
+    await probe8.PostAsync("/api/register", new StringContent(Wire.ToJson(new RegisterRequest(t36no, "9912", "Ghost")), System.Text.Encoding.UTF8, "application/json"));
+    Check((await Api8("/api/factory-state/" + t36no)).code == 404 &&
+          (await Api8("/api/factory-state/nope")).code == 404 &&
+          (await Api8("/api/issues/clear", new IssueActionRequest("nope"))).code == 404,
+        "T36j factory pull of a never-reported device 404s with a clear message; unknown clients 404 everywhere");
+
+    await app8.StopAsync();
+}
+var t36Dash = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "wwwroot", "dashboard.html"));
+Check(t36Dash.Contains("id=\"c-compliance\"") && t36Dash.Contains("gotoCompliance()") &&
+      t36Dash.Contains("getElementById('fleet').scrollIntoView") && !t36Dash.Contains("s-warn\">\n      <div class=\"l\"") &&
+      t36Dash.Contains("clearIssues(") && t36Dash.Contains("restoreIssues(") && t36Dash.Contains("cleared ↺") &&
+      t36Dash.Contains("saveFactory("),
+    "T36k dashboard ships ONE orange compliance pill that scrolls to the fleet, clear/restore row actions and a factory button — old warn stat tile is gone");
+var t36Schema = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "schemas", "master_manifest.schema.json")));
+Check(t36Schema.Contains("\"installed_apps\"") && t36Schema.Contains("names only, NO versions"),
+    "T36l factory-entry schema carries display_name + installed_apps and states versions are out of scope");
+
+
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
 return failed;
@@ -1343,7 +1436,7 @@ static bool Throws<T>(Action a) where T : Exception
 
 // minimal shape for reading /api/state
 file sealed record JsonDoc(List<Dev> devices, List<AlertDoc> alerts);
-file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null, bool wallpaper_drift = false, List<AppDoc>? apps = null, List<InstAppDoc>? installed_apps = null, string? desired_state = null, string? wu_install_state = null, int? wu_install_total = null);
+file sealed record Dev(string client_id, int? games, int? duplicates, List<IssueDoc> issues, List<JobDoc>? jobs, string? display_name = null, string? location = null, string? device_pin = null, int? wu_pending = null, string? wu_status = null, bool wallpaper_drift = false, List<AppDoc>? apps = null, List<InstAppDoc>? installed_apps = null, string? desired_state = null, string? wu_install_state = null, int? wu_install_total = null, int? cleared_issues = null, string? machine_model = null, string? agent_version = null);
 file sealed record AppDoc(string app_id, bool installed, string? version, bool? up_to_date, long checked_unix);
 file sealed record InstAppDoc(string name, string? publisher, string? version, string hive, string view);
 

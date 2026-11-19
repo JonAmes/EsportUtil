@@ -57,6 +57,13 @@ public sealed class ManifestStore
             report.MachineState?["machineModel"]?.GetValue<string>());
     }
 
+    /// <summary>T36: the device's last full Local Manifest as proof-of-state (null = never reported).</summary>
+    public LocalManifest? LoadReport(string clientId)
+    {
+        var p = Path.Combine(ReportsDir, clientId + ".json");
+        return File.Exists(p) ? Wire.FromJson<LocalManifest>(File.ReadAllText(p)) : null;
+    }
+
     public sealed record ManifestSummary(string ClientId, DateTimeOffset ReportTimestamp, string ContentHash,
         int GameCount, int DuplicateCount, string AgentVersion, string? MachineModel);
 
