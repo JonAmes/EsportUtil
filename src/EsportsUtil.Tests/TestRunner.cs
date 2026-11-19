@@ -1850,6 +1850,17 @@ printf '"999"\n(\n\t\t"name"\t\t"Counter-Strike 2"\n\t\t"depots"\n\t\t(\n\t\t\t"
     Check(!JobRunner.IsTransientSteamCmdExit(2) && !JobRunner.IsTransientSteamCmdExit(15) &&
           !JobRunner.IsTransientSteamCmdExit(19) && !JobRunner.IsTransientSteamCmdExit(33),
         "T45j disk/license/corrupt-path codes fail FAST — never four pointless retries on a real failure");
+
+    // T46: game-pill visual semantics on the dashboard (CSS + chip labels, asserted on source).
+    var dash46 = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "wwwroot", "dashboard.html"));
+    Check(dash46.Contains("@keyframes esu-opulse") &&
+          dash46.Contains(".cchip.up{color:#f97316") && dash46.Contains("animation:esu-opulse"),
+        "T46a out-of-date game chips carry the ORANGE pulsing animation (⚠ + esu-opulse), not static blue");
+    Check(dash46.Contains(".cchip.mi{color:var(--info") && dash46.Contains("box-shadow:0 0 8px color-mix(in srgb,var(--info"),
+        "T46b master-list-but-missing game chips (＋) GLOW blue via info-colored box-shadow");
+    Check(dash46.Contains(".cchip.ung{color:var(--mut)}") &&
+          dash46.Contains("update_required:'⚠'") && dash46.Contains("unmanaged_game:'?'") && dash46.Contains("duplicate_resolved:'ung'"),
+        "T46c '?' unmanaged games stay grey, ⚠ marks stale games, duplicates fold to grey — the three states read at a glance");
     await app9f.StopAsync();
 }
 

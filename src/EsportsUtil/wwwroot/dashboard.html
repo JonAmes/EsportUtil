@@ -102,7 +102,14 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
 
 /* compliance chips + job lines */
 .cchip{display:inline-block;font-size:11px;padding:1px 6px;margin:1px 3px 1px 0;border:1px solid var(--hair);border-radius:999px;white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;background:color-mix(in srgb,var(--fg) 3%,transparent)}
-.cchip.up{color:var(--info)} .cchip.rb,.cchip.un{color:var(--bad)} .cchip.mi,.cchip.ung{color:var(--mut)} .cchip.ok{color:var(--ok)}
+/* T46: game-pill semantics — '?' unmanaged stays grey, out-of-date games pulse ORANGE with a ⚠,
+   master-list games (＋) glow BLUE. */
+.cchip.up{color:#f97316;border-color:color-mix(in srgb,#f97316 45%,var(--hair));animation:esu-opulse 1.5s ease-in-out infinite}
+.cchip.mi{color:var(--info);border-color:color-mix(in srgb,var(--info) 45%,var(--hair));box-shadow:0 0 8px color-mix(in srgb,var(--info) 45%,transparent)}
+.cchip.ung{color:var(--mut)}
+@keyframes esu-opulse{0%,100%{background:color-mix(in srgb,#f97316 8%,transparent);box-shadow:0 0 0 transparent}
+50%{background:color-mix(in srgb,#f97316 24%,transparent);box-shadow:0 0 10px color-mix(in srgb,#f97316 55%,transparent)}}
+.cchip.rb,.cchip.un{color:var(--bad)} .cchip.ok{color:var(--ok)}
 .cchip.act{cursor:pointer;border-style:dashed} .cchip.act:hover{border-color:var(--acc);color:var(--acc)}
 .cchip .car{opacity:.55;font-size:10px}          /* T38 collapse caret on the summary pill */
 .jobline{font-size:11px;color:var(--mut);margin-top:3px;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -643,8 +650,10 @@ async function refresh(){
     const instTxt = `${dev.wu_install_done ?? 0}/${dev.wu_install_total ?? 0}`;
     const wuAgo = m => m === null || m === undefined ? '—' : m < 1 ? 'just now' : m < 60 ? Math.round(m) + 'm ago' : (m / 60).toFixed(1) + 'h ago';
     const dupNote = dev.duplicates ? `<div class="sub2">${dev.duplicates} duplicate game id(s) awaiting server resolution</div>` : '';
-    const kindCls = {update_required:'up', rollback_required:'rb', missing_from_machine:'mi', unmanaged_game:'ung', unapproved_app:'un', duplicate_resolved:'up'};
-    const kindLbl = {update_required:'↑', rollback_required:'↓', missing_from_machine:'＋', unmanaged_game:'?', unapproved_app:'⚠', duplicate_resolved:'dup'};
+    const kindCls = {update_required:'up', rollback_required:'rb', missing_from_machine:'mi', unmanaged_game:'ung', unapproved_app:'un', duplicate_resolved:'ung'};
+    // T46: ⚠ = this master-list game is OUT OF DATE (chip pulses orange); ＋ = in the master list,
+    // missing on the machine (chip glows blue); ? = on the machine but NOT in the master list (grey).
+    const kindLbl = {update_required:'⚠', rollback_required:'↓', missing_from_machine:'＋', unmanaged_game:'?', unapproved_app:'✕', duplicate_resolved:'dup'};
     // T38: findings collapse to ONE pill per station; the click expands the detailed, still-
     // actionable chips inline. Expansion is remembered across auto-refreshes.
     const chipList = issues.map(i => {
