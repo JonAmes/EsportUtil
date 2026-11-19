@@ -299,8 +299,8 @@ public static class ServerRole
             var normId = Core.GameScanner.NormalizeFolder(g.GameId);
             foreach (var cid in targets)
             {
-                if (policy.Protected.Any(r => Comparator.RuleMatches(r, g.DisplayName ?? g.GameId, null)
-                                           || Comparator.RuleMatches(r, g.GameId, null)))
+                if (policy?.Protected.Any(r => Comparator.RuleMatches(r, g.DisplayName ?? g.GameId, null)
+                                            || Comparator.RuleMatches(r, g.GameId, null)) is true)
                 { reasons.Add("vetoed by protected policy rule"); skipped++; continue; }
                 if (jobs.HasOpen(cid, kind, normId)) { skipped++; continue; }
                 string? path = null;
@@ -410,7 +410,7 @@ public static class ServerRole
             var removals = present
                 .Where(p => !src.InstalledApps!.Contains(p.Name, StringComparer.OrdinalIgnoreCase))
                 .Where(p => !p.Name.Contains("esportsutil", StringComparison.OrdinalIgnoreCase))  // never saw off the agent
-                .Where(p => !policy.Protected.Any(r => Comparator.RuleMatches(r, p.Name, p.Publisher)))
+                .Where(p => policy?.Protected.Any(r => Comparator.RuleMatches(r, p.Name, p.Publisher)) != true)
                 .Select(p => p.Name).ToList();
 
             var baseBody = new

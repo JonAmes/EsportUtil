@@ -1626,6 +1626,11 @@ printf '"999"\n(\n\t\t"name"\t\t"Counter-Strike 2"\n\t\t"depots"\n\t\t(\n\t\t\t"
           mig42["master_list"]![0]!["display_name"]!.GetValue<string>() == "Counter-Strike 2" &&
           mig42["version"]!.GetValue<int>() == 8,
         "T42b a legacy display-name master entry is migrated to the fleet id exactly once at startup (version bumped once, name kept)");
+    var npReg9b = await probe9b.PostAsync("/api/register", new StringContent(Wire.ToJson(new RegisterRequest("t42np", "9941", "Vertex Prime X")), System.Text.Encoding.UTF8, "application/json"));
+    var np42 = await probe9b.PostAsync("/api/master-install", new StringContent(Wire.ToJson(new MasterJobRequest("730")), System.Text.Encoding.UTF8, "application/json"));
+    var npJson42 = JsonNode.Parse(await np42.Content.ReadAsStringAsync())!;
+    Check(npReg9b.IsSuccessStatusCode && (int)np42.StatusCode == 200 && npJson42["queued"]!.GetValue<int>() == 1,
+        "T42l master verbs queue with NO policy file present — a null LoadPolicy must never 500 the queue (live v0.5.12 regression)");
     await app9b.StopAsync();
 
     var mi42 = await Api9("/api/master-install", new MasterJobRequest("730", tgt9));
