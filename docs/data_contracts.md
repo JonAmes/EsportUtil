@@ -267,3 +267,8 @@ master list and agent game reports finally speak the same language.
 - Dashboard: each master row shows `install…` / `uninstall…` (station-picker modal), `push`
   (confirm, all stations) and `remove` (confirm, list-only). The manifest modal shows display name
   + fleet id side by side.
+
+Agent compatibility: `remove_game` is a NEW job kind introduced in v0.5.12/0.5.13. Agents
+older than that **safely refuse** it (`unknown job kind — refused`, job marked failed, nothing
+touched) until they self-update from the GitHub release. A policy file is NOT required for any
+master verb — the protected-rules veto simply does not apply when none exist.
