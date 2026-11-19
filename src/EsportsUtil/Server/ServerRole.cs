@@ -215,6 +215,8 @@ public static class ServerRole
 
         // ---- factory state pull ----
         app.MapGet("/api/factory-state", () => Results.Json(manifests.LoadMaster().FactoryStateMap, Wire.Options));
+        // T40: the header "manifest" chip was inert text — this backs the browse modal.
+        app.MapGet("/api/manifest", () => Results.Json(manifests.LoadMaster(), Wire.Options));
 
         // T36: operator pulls an enrolled machine's factory state — its saved name plus every
         // installed app NAME from the last full report. Versions are deliberately NOT captured:

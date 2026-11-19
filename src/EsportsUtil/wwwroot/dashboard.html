@@ -150,7 +150,7 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
     <h1>E-Sports Dashboard</h1>
     <span class="chip mono" id="c-ver" title="server build" style="font-size:11px">v–</span>
     <span class="chip" id="c-user" hidden title="signed-in operator — click to sign out" style="cursor:pointer"></span>
-    <span class="chip">manifest <b id="c-manifest">–</b></span>
+    <span class="chip" style="cursor:pointer" title="master manifest — click to browse exactly what the server currently tells agents" onclick="showManifest()">manifest <b id="c-manifest">–</b></span>
     <span class="chip mono">factory <b id="c-factory">–</b> entries</span>
     <span class="pill warn" id="c-compliance" hidden style="cursor:pointer;font-size:12px;padding:4px 12px" title="compliance findings across the fleet — click to expand every affected station and jump below" onclick="gotoCompliance()">⚠ <b id="c-issues">0</b> compliance</span>
     <a class="chip" href="/settings" style="text-decoration:none;color:var(--acc)">settings</a>
@@ -246,6 +246,13 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
       <button class="mbtn" onclick="closeDeploy()">cancel</button>
       <button class="mbtn dang" id="dep-go" onclick="depGo()" disabled>deploy</button>
     </div>
+  </div>
+</div>
+<div class="modal" id="mf-modal" hidden onclick="if(event.target===this)closeManifest()">
+  <div class="mbox" style="width:min(620px,94vw)">
+    <div class="mtitle">Master manifest</div>
+    <div id="mf-body" style="max-height:60vh;overflow:auto"></div>
+    <div class="mrow"><button class="mbtn" onclick="closeManifest()">close</button></div>
   </div>
 </div>
 <script>
@@ -376,6 +383,27 @@ async function depGo(){
   refresh();
 }
 function closeDeploy(){ document.getElementById('dep-modal').hidden = true; _depT = _depP = null; }
+
+// T40: the header manifest chip was dead text — now it opens the master manifest itself:
+// version, updated stamp, the managed-game list, and the saved factory baselines.
+async function showManifest(){
+  const m = await (await fetch('/api/manifest')).json();
+  const gl = m.master_list || [], fl = m.factory_state_map || [];
+  document.getElementById('mf-body').innerHTML =
+    `<div style="font-size:12px;opacity:.7;margin-bottom:6px">version <b>${m.version}</b> · updated ${esc(new Date(m.updated_timestamp).toLocaleString())}</div>` +
+    `<div style="font-weight:600;font-size:12px;margin:4px 0">managed games (${gl.length})</div>` +
+    (gl.length
+      ? `<table><tr><td>game</td><td>latest</td><td>min</td><td>launcher</td></tr>` +
+        gl.map(g => `<tr><td>${esc(g.game_id)}</td><td class="mono">${esc(g.latest_version)}</td><td class="mono">${esc(g.minimum_version||'—')}</td><td>${esc(g.launcher||'—')}</td></tr>`).join('') +
+        `</table>`
+      : '<div style="opacity:.6;font-size:12.5px">none yet — games appear here as the updates manager tracks them</div>') +
+    `<div style="font-weight:600;font-size:12px;margin:12px 0 4px">factory baselines (${fl.length})</div>` +
+    (fl.length
+      ? fl.map(f => `<div style="font-size:12.5px">• <b>${esc(f.display_name||f.entry_id)}</b> — ${(f.installed_apps||[]).length} app name(s), captured ${esc(new Date(f.captured_timestamp).toLocaleString())}</div>`).join('')
+      : '<div style="opacity:.6;font-size:12.5px">none — press "factory" on a station to capture one</div>');
+  document.getElementById('mf-modal').hidden = false;
+}
+function closeManifest(){ document.getElementById('mf-modal').hidden = true; }
 
 let _devById = {};
 // Offboarding is permanent (identity tombstoned), so a bare confirm() is too easy to blow through:

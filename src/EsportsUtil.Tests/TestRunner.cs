@@ -1538,6 +1538,15 @@ Check(t36Schema.Contains("\"installed_apps\"") && t36Schema.Contains("names only
           dash10.Contains("d.factory_entries ?") && dash10.Contains("Factory reset will UNINSTALL"),
         "T39k dashboard ships a per-row deploy button (only once a baseline exists), a preview modal, and a destructive-removals second confirm");
 
+    // ---------- T40: the header manifest chip was dead text — give it the manifest itself ----------
+    var man40 = await Get9("/api/manifest");
+    Check(man40["version"]!.GetValue<int>() >= 1 && man40["updated_timestamp"]!.GetValue<string>().Length > 10 &&
+          man40["master_list"] is not null && man40["factory_state_map"]!.AsArray().Count == 2,
+        "T40a GET /api/manifest serves the live master manifest — version, updated stamp, game list, both factory baselines");
+    Check(dash10.Contains("onclick=\"showManifest()\"") && dash10.Contains("id=\"mf-modal\"") &&
+          dash10.Contains("fetch('/api/manifest')") && dash10.Contains("managed games"),
+        "T40b the manifest chip is clickable and opens a real browse modal (games + baselines + stamp) — no more pill that does nothing");
+
     await app9.StopAsync();
 }
 
