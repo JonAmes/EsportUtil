@@ -56,8 +56,11 @@ public static class Comparator
     public static List<Issue> Games(LocalManifest r, MasterManifest m)
     {
         var issues = new List<Issue>();
+        // T42 pairing: reported ids are folder-normalized ("counter_strike_2"); master entries key by
+        // the SAME normalized id (display names migrate at server start). Normalizing the master key
+        // is idempotent for already-normalized ids and catches hand-written display-name entries.
         var byId = new Dictionary<string, MasterGame>(StringComparer.OrdinalIgnoreCase);
-        foreach (var g in m.MasterList) byId[g.GameId] = g;
+        foreach (var g in m.MasterList) byId[Core.GameScanner.NormalizeFolder(g.GameId)] = g;
 
         var reported = r.GameReports
             .Where(g => g.Status != "DUPLICATE_FOUND")

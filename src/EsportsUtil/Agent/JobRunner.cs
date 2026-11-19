@@ -64,6 +64,7 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
             {
                 "update_game" => await UpdateGameAsync(job, ct),
                 "cleanup_duplicate" => CleanupDuplicate(job),
+                "remove_game" => RemoveGame(job),
                 "remove_software" => RemoveSoftware(job),
                 "deploy_content" => await EnsureContentAsync(job.Subject, ct),
                 "install_app" or "update_app" => await InstallAppAsync(job, ct),
@@ -80,14 +81,19 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
 
     private async Task<(bool, string)> UpdateGameAsync(Job job, CancellationToken ct)
     {
-        var args = SteamCmdArgs(job.Path ?? throw new InvalidOperationException("missing install path"),
+        // T42: a null job path now means "install into the machine's default Steam library" —
+        // master-list push/install onto stations that never had the game.
+        var dir = !string.IsNullOrWhiteSpace(job.Path) ? job.Path! : GameScanner.DefaultSteamRoot();
+        if (string.IsNullOrWhiteSpace(dir))
+            return (false, "no install path in job and no default Steam library found on this machine");
+        var args = SteamCmdArgs(dir,
                                job.Arg ?? throw new InvalidOperationException("missing app id"));
         // Prefer the discovered steamcmd (config path → winget link/package → PATH); fall back to
         // the bare config name only when nothing was located (job fails fast with exit != 0 then).
         var exe = SteamCmdWatch.Last is { Found: true, Path: { } sc } ? sc : cfg.SteamCmdPath;
         var exit = await RunProcessAsync(exe, args, TimeSpan.FromMinutes(cfg.JobTimeoutMin), ct);
         if (exit != 0) return (false, $"steamcmd exit {exit}");
-        return (true, $"app_update {job.Arg} validate → exit 0 in {job.Path}");
+        return (true, $"app_update {job.Arg} validate → exit 0 in {dir}");
     }
 
     private (bool, string) CleanupDuplicate(Job job)
@@ -106,6 +112,33 @@ public sealed class JobRunner(HttpClient http, EsportsConfig cfg)
             removed++;
         }
         return (true, $"removed {removed} duplicate copy(ies) of {job.Subject}, kept {keep}");
+    }
+
+    // T42: master-list "uninstall" — delete EVERY copy of the game (fresh scan, never the server's
+    // stale copy list), including duplicate copies. Same roots guard as cleanup_duplicate: we only
+    // ever delete inside scan roots, never a root itself. Idempotent: not installed = success.
+    // Steam's appmanifest is left alone — a later app_update re-downloads missing files.
+    public static List<string> RemoveGamePlan(IEnumerable<GameReport> current, string gameId) =>
+        current.Where(g => g.GameId.Equals(gameId, StringComparison.OrdinalIgnoreCase))
+               .Select(g => g.InstallPath).ToList();
+
+    private (bool, string) RemoveGame(Job job)
+    {
+        var roots = GameScanner.EffectiveScanDirs(cfg.ScanDirs, GameScanner.SteamScanRoots());
+        var scan = GameScanner.Scan(roots);
+        var doomed = RemoveGamePlan(scan.Reports, job.Subject);
+        if (doomed.Count == 0) return (true, $"{job.Subject} not installed here — nothing to do");
+        var removed = 0;
+        foreach (var p in doomed)
+        {
+            var full = Path.GetFullPath(p);
+            if (!roots.Any(root => full.StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))
+                || roots.Any(root => string.Equals(full, Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"refusing to delete scan root or out-of-root path: {p}");
+            Directory.Delete(p, recursive: true);
+            removed++;
+        }
+        return (true, $"removed {removed} copy(ies) of {job.Subject}");
     }
 
     private (bool, string) RemoveSoftware(Job job)

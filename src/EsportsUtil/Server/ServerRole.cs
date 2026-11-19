@@ -36,6 +36,18 @@ public static class ServerRole
 
         var registry = new DeviceRegistry(cfg.DataDir);
         var manifests = new ManifestStore(cfg.DataDir);
+
+        // T42 pairing migration: legacy master entries stored the steamcmd DISPLAY name as game_id,
+        // but the fleet compares against folder-normalized ids ("counter_strike_2"). One-time rewrite:
+        // game_id := NormalizeFolder(game_id), display_name := original. Bump version so agents re-pair.
+        {
+            var mm = manifests.LoadMaster();
+            var migrated = mm.MasterList.Select(g =>
+                g.GameId == Core.GameScanner.NormalizeFolder(g.GameId) ? g
+                : g with { DisplayName = g.DisplayName ?? g.GameId, GameId = Core.GameScanner.NormalizeFolder(g.GameId) }).ToList();
+            if (!migrated.SequenceEqual(mm.MasterList))
+                manifests.SaveMaster(mm with { MasterList = migrated, Version = mm.Version + 1 });
+        }
         var content = new ContentLibrary(cfg.DataDir);
         var hub = new AlertHub();
         var labelsDir = Path.Combine(cfg.DataDir, "labels");
@@ -239,15 +251,86 @@ public static class ServerRole
             var (resolved, err) = await SteamInfo.ResolveAsync(appId, steam);
             if (resolved is null)
                 return Results.Json(new AckEnvelope(false, err), Wire.Options, statusCode: 502);
-            if (m.MasterList.Any(g => g.GameId.Equals(resolved.Name, StringComparison.OrdinalIgnoreCase)))
+            var normId41 = Core.GameScanner.NormalizeFolder(resolved.Name);
+            if (m.MasterList.Any(g => g.GameId.Equals(normId41, StringComparison.OrdinalIgnoreCase)
+                                   || (g.DisplayName ?? g.GameId).Equals(resolved.Name, StringComparison.OrdinalIgnoreCase)))
                 return Results.Json(new AckEnvelope(false, $"\"{resolved.Name}\" is already in the master list (AppID {resolved.AppId})"), Wire.Options, statusCode: 409);
-            m.MasterList.Add(new MasterGame(resolved.Name, resolved.BuildId, Launcher: "steam", AppId: appId));
+            // T42: game_id is the fleet (folder-normalized) id so pairing, install and uninstall all
+            // line up with agent reports; the steamcmd display name is kept for humans.
+            m.MasterList.Add(new MasterGame(normId41, resolved.BuildId, Launcher: "steam", AppId: appId, DisplayName: resolved.Name));
             manifests.SaveMaster(m with { Version = m.Version + 1 });
             return Results.Json(new
             {
                 ok = true, app_id = appId, game = resolved.Name, build_id = resolved.BuildId,
                 manifest_version = m.Version + 1,
             }, Wire.Options);
+        });
+
+        // ---- T42: entry actions — remove from master list / install on a station / push to the
+        // fleet / uninstall. install reuses update_game (steamcmd app_update validate installs when
+        // absent); uninstall is the new remove_game verb (fresh scan, delete every copy). ----
+
+        app.MapPost("/api/master-remove", (MasterRemoveRequest req) =>
+        {
+            var m = manifests.LoadMaster();
+            var hit = m.MasterList.FirstOrDefault(g =>
+                g.AppId == req.AppId || g.GameId.Equals(req.AppId, StringComparison.OrdinalIgnoreCase));
+            if (hit is null)
+                return Results.Json(new AckEnvelope(false, "entry is not in the master list"), Wire.Options, statusCode: 404);
+            m.MasterList.Remove(hit);
+            manifests.SaveMaster(m with { Version = m.Version + 1 });
+            return Results.Json(new { ok = true, removed = hit.DisplayName ?? hit.GameId, manifest_version = m.Version + 1 }, Wire.Options);
+        });
+
+        // Shared queueing for install (update_game) and uninstall (remove_game).
+        // client_id == null means EVERY active station (that's the "push"). Returns queued/skipped/reasons;
+        // queued < 0 encodes a request error (-1 unknown entry, -2 unknown client).
+        (int queued, int skipped, List<string> reasons) QueueMasterJob(string appId, string kind, string? clientId)
+        {
+            var m = manifests.LoadMaster();
+            var g = m.MasterList.FirstOrDefault(x => x.AppId == appId);
+            if (g is null) return (-1, 0, new List<string> { "entry is not in the master list" });
+            List<string>? targets = clientId is null
+                ? registry.Snapshot().Where(e => e.DesiredState == "active").Select(e => e.ClientId).ToList()
+                : (registry.Snapshot().Any(e => e.ClientId == clientId) ? new List<string> { clientId } : null);
+            if (targets is null) return (-2, 0, new List<string> { "unknown client" });
+            var policy = manifests.LoadPolicy();
+            int queued = 0, skipped = 0; var reasons = new List<string>();
+            var normId = Core.GameScanner.NormalizeFolder(g.GameId);
+            foreach (var cid in targets)
+            {
+                if (policy.Protected.Any(r => Comparator.RuleMatches(r, g.DisplayName ?? g.GameId, null)
+                                           || Comparator.RuleMatches(r, g.GameId, null)))
+                { reasons.Add("vetoed by protected policy rule"); skipped++; continue; }
+                if (jobs.HasOpen(cid, kind, normId)) { skipped++; continue; }
+                string? path = null;
+                if (kind == "update_game")
+                {
+                    var lm = manifests.LoadReport(cid);
+                    path = lm?.GameReports
+                        .FirstOrDefault(gr => gr.GameId.Equals(normId, StringComparison.OrdinalIgnoreCase) && gr.Status != "DUPLICATE_FOUND")?.InstallPath
+                        ?? m.FactoryStateMap.SelectMany(f => f.GameBaselines)
+                            .FirstOrDefault(b => b.GameId.Equals(normId, StringComparison.OrdinalIgnoreCase))?.InstallPath;
+                    // path == null => the agent installs into its default Steam library root.
+                }
+                jobs.Enqueue(cid, kind, normId, g.AppId, path);
+                queued++;
+            }
+            return (queued, skipped, reasons);
+        }
+
+        app.MapPost("/api/master-install", (MasterJobRequest req) =>
+        {
+            var (q, s, reasons) = QueueMasterJob(req.AppId, "update_game", req.ClientId);
+            if (q < 0) return Results.Json(new AckEnvelope(false, reasons[0]), Wire.Options, statusCode: 404);
+            return Results.Json(new { ok = true, queued = q, skipped = s, reasons }, Wire.Options);
+        });
+
+        app.MapPost("/api/master-uninstall", (MasterJobRequest req) =>
+        {
+            var (q, s, reasons) = QueueMasterJob(req.AppId, "remove_game", req.ClientId);
+            if (q < 0) return Results.Json(new AckEnvelope(false, reasons[0]), Wire.Options, statusCode: 404);
+            return Results.Json(new { ok = true, queued = q, skipped = s, reasons }, Wire.Options);
         });
 
         // T36: operator pulls an enrolled machine's factory state — its saved name plus every
@@ -708,7 +791,9 @@ public static class ServerRole
             {
                 case "update_game":
                     // Allow-list rule: we only patch games the Master Manifest names, with a Steam app id.
-                    var mg = master.MasterList.FirstOrDefault(g => g.GameId.Equals(req.Subject, StringComparison.OrdinalIgnoreCase));
+                    // T42: ids are matched in the fleet's normalized namespace on both sides.
+                    var mg = master.MasterList.FirstOrDefault(g =>
+                        Core.GameScanner.NormalizeFolder(g.GameId).Equals(Core.GameScanner.NormalizeFolder(req.Subject), StringComparison.OrdinalIgnoreCase));
                     if (mg is null) return Results.Json(new AckEnvelope(false, "game not in Master Manifest"), Wire.Options, statusCode: 400);
                     if (mg.AppId is null) return Results.Json(new AckEnvelope(false, "no Steam app_id in Master Manifest — update handler unsupported for this game"), Wire.Options, statusCode: 400);
                     if (st.issues.Any(i => i.Kind == "rollback_required" && i.Subject == req.Subject))
@@ -719,7 +804,8 @@ public static class ServerRole
                     path = iss.KeepPath
                         ?? master.FactoryStateMap.SelectMany(f => f.GameBaselines)
                            .FirstOrDefault(b => b.GameId.Equals(req.Subject, StringComparison.OrdinalIgnoreCase))?.InstallPath;
-                    if (path is null) return Results.Json(new AckEnvelope(false, "no known install path for this game"), Wire.Options, statusCode: 400);
+                    // T42: no known path is no longer a 400 — the agent falls back to its default
+                    // Steam library root (fresh install onto a machine that never had the game).
                     arg = mg.AppId;
                     break;
                 case "cleanup_duplicate":

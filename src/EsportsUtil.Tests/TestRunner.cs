@@ -1583,7 +1583,8 @@ printf '"730"\n(\n\t\t"name"\t\t"Counter-Strike 2"\n\t\t"depots"\n\t\t(\n\t\t\t"
     var mf41 = await Get9("/api/manifest");
     var ml41 = mf41["master_list"]!.AsArray();
     Check(ml41.Count == 1 && ml41[0]!["app_id"]!.GetValue<string>() == "730" &&
-          ml41[0]!["game_id"]!.GetValue<string>() == "Counter-Strike 2" &&
+          ml41[0]!["game_id"]!.GetValue<string>() == "counter_strike_2" &&
+          ml41[0]!["display_name"]!.GetValue<string>() == "Counter-Strike 2" &&
           ml41[0]!["latest_version"]!.GetValue<string>() == "987654" &&
           ml41[0]!["launcher"]!.GetValue<string>() == "steam" &&
           mf41["version"]!.GetValue<int>() == man40["version"]!.GetValue<int>() + 1,
@@ -1609,6 +1610,76 @@ printf '"999"\n(\n\t\t"name"\t\t"Counter-Strike 2"\n\t\t"depots"\n\t\t(\n\t\t\t"
           dash10.Contains("addGameByApp(") && dash10.Contains("/api/master-add") &&
           dash10.Contains("duplicates are rejected") && dash10.Contains("id=\"ma-list\""),
         "T41h the add-by-AppID box sits UNDER the fleet view, posts to master-add, and lists the recorded entries");
+
+    // ---------- T42: master-entry verbs — install / push / uninstall / remove ----------
+    Check(GameScanner.NormalizeFolder("Counter-Strike 2") == "counter_strike_2",
+        "T42a the fleet pairing id is the folder-normalized name — master entries and agent reports speak the same language");
+
+    var dir9b = Path.Combine(tmp, "srv9b"); Directory.CreateDirectory(dir9b);
+    File.WriteAllText(Path.Combine(dir9b, "MasterManifest.json"), Wire.ToJson(new MasterManifest(7, DateTimeOffset.UtcNow,
+        new List<MasterGame> { new("Counter-Strike 2", "999", Launcher: "steam", AppId: "730") }, new List<FactoryEntry>())));
+    using var app9b = ServerRole.BuildApp(new EsportsConfig { Role = "server", ServerUrl = "http://0.0.0.0:4395", DataDir = dir9b });
+    await app9b.StartAsync();
+    using var probe9b = new HttpClient { BaseAddress = new Uri("http://127.0.0.1:4395"), Timeout = TimeSpan.FromSeconds(5) };
+    var mig42 = JsonNode.Parse(await probe9b.GetStringAsync("/api/manifest"))!;
+    Check(mig42["master_list"]![0]!["game_id"]!.GetValue<string>() == "counter_strike_2" &&
+          mig42["master_list"]![0]!["display_name"]!.GetValue<string>() == "Counter-Strike 2" &&
+          mig42["version"]!.GetValue<int>() == 8,
+        "T42b a legacy display-name master entry is migrated to the fleet id exactly once at startup (version bumped once, name kept)");
+    await app9b.StopAsync();
+
+    var mi42 = await Api9("/api/master-install", new MasterJobRequest("730", tgt9));
+    var devT42 = Wire.FromJson<JsonDoc>(await probe9.GetStringAsync("/api/state"))!.devices.Single(x => x.client_id == tgt9);
+    Check(mi42.code == 200 && mi42.json["queued"]!.GetValue<int>() == 1 &&
+          (devT42.jobs ?? new()).Any(j => j.kind == "update_game" && j.subject == "counter_strike_2"),
+        "T42c 'install' queues ONE update_game job on the chosen station — steamcmd app_update installs when absent");
+    var mi42b = await Api9("/api/master-install", new MasterJobRequest("730", tgt9));
+    Check(mi42b.code == 200 && mi42b.json["queued"]!.GetValue<int>() == 0 && mi42b.json["skipped"]!.GetValue<int>() == 1,
+        "T42d re-install dedups against the open job — no double installs");
+    var mp42 = await Api9("/api/master-install", new MasterJobRequest("730"));   // push = no client_id
+    Check(mp42.code == 200 && mp42.json["queued"]!.GetValue<int>() == 2 && mp42.json["skipped"]!.GetValue<int>() == 1,
+        "T42e 'push' (client_id omitted) fans the install out to EVERY active station; the already-queued one dedups");
+    var mu42 = await Api9("/api/master-uninstall", new MasterJobRequest("730"));
+    var st42 = Wire.FromJson<JsonDoc>(await probe9.GetStringAsync("/api/state"))!;
+    Check(mu42.code == 200 && mu42.json["queued"]!.GetValue<int>() == 3 &&
+          st42.devices.Count(d => (d.jobs ?? new()).Any(j => j.kind == "remove_game" && j.subject == "counter_strike_2")) == 3,
+        "T42f 'uninstall' rides to every station as a remove_game job of the SAME fleet id the agent scans for");
+    Check((await Api9("/api/master-install", new MasterJobRequest("12345", tgt9))).code == 404 &&
+          (await Api9("/api/master-uninstall", new MasterJobRequest("730", "nope"))).code == 404,
+        "T42g unknown master entry and unknown client both 404 — jobs never aim at nothing");
+
+    File.WriteAllText(Path.Combine(dir9, "ApprovedSoftwarePolicy.json"), Wire.ToJson(new ApprovedSoftwarePolicy(
+        2, DateTimeOffset.UtcNow, "report_only",
+        new List<SoftwareRule> { new("Steam"), new("Discord") },
+        new List<SoftwareRule> { new("Rogue Suite"), new("Counter-Strike 2") })));
+    var mv42 = await Api9("/api/master-install", new MasterJobRequest("730"));
+    Check(mv42.code == 200 && mv42.json["queued"]!.GetValue<int>() == 0 && mv42.json["skipped"]!.GetValue<int>() == 3 &&
+          mv42.json["reasons"]!.AsArray().Any(x => x!.GetValue<string>().Contains("vetoed")),
+        "T42h a policy-PROTECTED game is vetoed by protected policy rules before ANY queueing — install and uninstall both");
+
+    var mrBad42 = await Api9("/api/master-remove", new MasterRemoveRequest("9999"));
+    var verBefore42 = (await Get9("/api/manifest"))["version"]!.GetValue<int>();
+    var mr42 = await Api9("/api/master-remove", new MasterRemoveRequest("730"));
+    var mf42 = await Get9("/api/manifest");
+    Check(mrBad42.code == 404 && mr42.code == 200 && mf42["master_list"]!.AsArray().Count == 0 &&
+          mf42["version"]!.GetValue<int>() == verBefore42 + 1 &&
+          (await Api9("/api/master-install", new MasterJobRequest("730", tgt9))).code == 404,
+        "T42i 'remove' deletes the MASTER-LIST entry only (manifest bumps, installed copies untouched); gone entries cannot queue jobs");
+
+    var rg42 = JobRunner.RemoveGamePlan(new[]
+    {
+        new GameReport("counter_strike_2", "Counter-Strike 2", "/steam/common/cs2", "1", "steam", "OK"),
+        new GameReport("counter_strike_2", "Counter-Strike 2", "/extra/CS2", "1", "steam", "DUPLICATE_FOUND"),
+        new GameReport("dota_2", "Dota 2", "/steam/common/dota 2", "1", "steam", "OK"),
+    }, "COUNTER_STRIKE_2");
+    Check(rg42.SequenceEqual(new[] { "/steam/common/cs2", "/extra/CS2" }) &&
+          JobRunner.RemoveGamePlan(Array.Empty<GameReport>(), "counter_strike_2").Count == 0,
+        "T42j the agent remove_game plan deletes EVERY copy case-insensitively (duplicates included) and no-ops when absent");
+
+    Check(dash10.Contains("id=\"mj-modal\"") && dash10.Contains("/api/master-install") &&
+          dash10.Contains("/api/master-uninstall") && dash10.Contains("/api/master-remove") &&
+          dash10.Contains("mjPush(") && dash10.Contains("display_name||g.game_id"),
+        "T42k every master row ships install…/uninstall… (station picker), push (all stations, confirm-gated) and remove (confirm-gated) buttons");
 
     await app9.StopAsync();
 }

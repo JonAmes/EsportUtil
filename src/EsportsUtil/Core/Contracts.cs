@@ -83,7 +83,8 @@ public sealed record MasterGame(
     string LatestVersion,
     string? MinimumVersion = null,
     string? Launcher = null,
-    string? AppId = null);
+    string? AppId = null,
+    string? DisplayName = null);   // T42: human name from steamcmd; GameId is the fleet (folder-normalized) id
 
 public sealed record GameBaseline(string GameId, string Version, string? InstallPath = null);
 
@@ -128,6 +129,8 @@ public sealed record FactoryDeployRequest(string? SourceClientId = null);   // T
 // ---- T41: master-list add by Steam AppID (steamcmd resolves name + depot BuildID) ----
 
 public sealed record MasterAddRequest(string AppId);
+public sealed record MasterRemoveRequest(string AppId);
+public sealed record MasterJobRequest(string AppId, string? ClientId = null);
 
 public static class Wire
 {

@@ -242,3 +242,28 @@ bumps — so agents see the recorded game immediately (the updates manager owns 
 game versions from here on). The dashboard box re-renders the recorded list each poll;
 the manifest modal shows the AppID per game. Test seam: `ESU_FAKE_STEAMCMD` (a shell
 command substituted for steamcmd — set only by tests).
+
+## 🧰 12. Master-List Verbs — install / push / uninstall / remove (§master-jobs — T42)
+
+Each master-list entry (T41) now carries four operator actions. Pairing was fixed first:
+`master_list[].game_id` is the **fleet id** — the folder-normalized name
+(`GameScanner.NormalizeFolder`, e.g. `Counter-Strike 2` → `counter_strike_2`) — and the human
+name from steamcmd lives in `display_name`. The Comparator keys master entries by normalized id,
+and legacy display-name entries are migrated (once, version-bumped) at server startup, so the
+master list and agent game reports finally speak the same language.
+
+| Endpoint | Body | Effect |
+|---|---|---|
+| `POST /api/master-install` | `{app_id, client_id?}` | Queues an `update_game` job (`steamcmd app_update <appid> validate` — installs when absent). `client_id` = one station; **omitted = every active station (push)**. |
+| `POST /api/master-uninstall` | `{app_id, client_id?}` | Queues a `remove_game` job: the agent **re-scans**, deletes **every copy** (duplicates included) but only **inside scan roots**, never a root itself. Not installed = idempotent success. |
+| `POST /api/master-remove` | `{app_id}` | Deletes the **master-list entry only** — installed copies untouched, stations re-flag the game as unmanaged. Manifest version bumps; unknown entry 404. |
+
+- Install path resolution: the station's reported copy → a saved factory-baseline path → empty,
+  which means the agent installs into its **default Steam library root**.
+- Policy veto: a `Protected` policy rule matching the game (display name or fleet id) blocks
+  install AND uninstall queueing — reported in the `reasons` array with `skipped` counts.
+- Dedup: an already-open job of the same kind + subject on a station is skipped, never doubled.
+- Errors: unknown AppID entry or unknown `client_id` → 404. Response: `{ok, queued, skipped, reasons}`.
+- Dashboard: each master row shows `install…` / `uninstall…` (station-picker modal), `push`
+  (confirm, all stations) and `remove` (confirm, list-only). The manifest modal shows display name
+  + fleet id side by side.

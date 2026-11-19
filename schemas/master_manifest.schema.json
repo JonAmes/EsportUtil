@@ -48,6 +48,13 @@
               "null"
             ],
             "description": "launcher-native id (Steam appid etc.) used by Phase 4 patch jobs"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "T42: human-readable name (e.g. steamcmd app name); game_id stays in the fleet's folder-normalized namespace"
           }
         },
         "additionalProperties": false

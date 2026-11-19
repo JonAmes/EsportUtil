@@ -267,6 +267,18 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
     <div class="mrow"><button class="mbtn" onclick="closeManifest()">close</button></div>
   </div>
 </div>
+<div class="modal" id="mj-modal" hidden onclick="if(event.target===this)mjClose()">
+  <div class="mbox" style="width:min(520px,94vw)">
+    <div class="mtitle" id="mj-title">master entry job</div>
+    <div class="mnote" id="mj-note"></div>
+    <select id="mj-st" style="width:100%;margin:8px 0"></select>
+    <div id="mj-msg" style="font-size:12.5px;min-height:16px;margin:4px 0"></div>
+    <div class="mrow">
+      <button class="mbtn" onclick="mjClose()">cancel</button>
+      <button class="mbtn pri" id="mj-go" onclick="mjGo()">queue</button>
+    </div>
+  </div>
+</div>
 <script>
 // T35: any operator call answering 401 (no/expired session) bounces the page to the sign-in card.
 const _f0 = window.fetch;
@@ -406,7 +418,7 @@ async function showManifest(){
     `<div style="font-weight:600;font-size:12px;margin:4px 0">managed games (${gl.length})</div>` +
     (gl.length
       ? `<table><tr><td>game</td><td>latest</td><td>min</td><td>launcher</td></tr>` +
-        gl.map(g => `<tr><td>${esc(g.game_id)}</td><td class="mono">${esc(g.latest_version)}</td><td class="mono">${esc(g.minimum_version||'—')}</td><td>${esc(g.launcher||'—')}</td></tr>`).join('') +
+        gl.map(g => `<tr><td>${esc(g.display_name || g.game_id)}${g.display_name ? ` <span class="mono" style="opacity:.5">${esc(g.game_id)}</span>` : ''}</td><td class="mono">${esc(g.latest_version)}</td><td class="mono">${esc(g.minimum_version||'—')}</td><td>${esc(g.launcher||'—')}</td></tr>`).join('') +
         `</table>`
       : '<div style="opacity:.6;font-size:12.5px">none yet — games appear here as the updates manager tracks them</div>') +
     `<div style="font-weight:600;font-size:12px;margin:12px 0 4px">factory baselines (${fl.length})</div>` +
@@ -433,11 +445,81 @@ async function addGameByApp(){
   btn.disabled = false; btn.textContent = 'add game';
   refresh();
 }
+let _mlCache = [];
 async function renderMasterList(){
   let ml; try { ml = (await (await fetch('/api/manifest')).json()).master_list || []; } catch { return; }
+  _mlCache = ml;
   document.getElementById('ma-list').innerHTML = ml.length
-    ? ml.map(g => `<div style="font-size:12.5px;margin:2px 0">• <b>${esc(g.game_id)}</b> <span class="mono" style="opacity:.7">AppID ${esc(g.app_id||'—')} · build ${esc(g.latest_version)} · ${esc(g.launcher||'steam')}</span></div>`).join('')
+    ? ml.map(g => {
+        const a = esc(g.app_id||'');
+        return `<div style="font-size:12.5px;margin:4px 0">• <b>${esc(g.display_name||g.game_id)}</b> <span class="mono" style="opacity:.7">AppID ${esc(g.app_id||'—')} · build ${esc(g.latest_version)} · ${esc(g.launcher||'steam')}</span>` +
+          ` <span style="float:right">${a ? `<button class="btn" onclick="mjOpen('${a}','install')">install…</button> ` +
+          `<button class="btn" onclick="mjOpen('${a}','uninstall')">uninstall…</button> ` +
+          `<button class="btn" title="queue this game on every active station" onclick="mjPush('${a}')">push</button> ` : ''}` +
+          `<button class="btn" style="color:var(--bad)" title="remove from master list only — installed copies untouched" onclick="mjRemove('${a||esc(g.game_id)}')">remove</button></span></div>`;
+      }).join('')
     : '<div style="opacity:.6;font-size:12.5px">master list is empty — add a Steam AppID above; the manifest chip shows the full list</div>';
+}
+
+// T42: per-entry actions. install/uninstall pick ONE station (update_game / remove_game job);
+// push queues the install on EVERY active station; remove edits the master list itself.
+let _mj = null;
+function mjSetMsg(t, bad){ const m = document.getElementById('mj-msg'); m.textContent = t; m.style.color = bad ? 'var(--bad)' : 'var(--ok)'; }
+function mjOpen(appId, action){
+  const g = _mlCache.find(x => (x.app_id||'') === appId) || {};
+  _mj = { appId, action, name: g.display_name || g.game_id };
+  document.getElementById('mj-title').textContent = (action === 'install' ? 'Install ' : 'Uninstall ') + _mj.name;
+  document.getElementById('mj-note').innerHTML = action === 'install'
+    ? 'Queues a Steam install/update on the chosen station — <code>app_update ' + esc(appId) + ' validate</code>; installs into the reported copy, a factory baseline path, or the default Steam library if neither is known.'
+    : 'Queues deletion of <b>every copy</b> of this game on the chosen station (fresh scan; only inside scan roots; protected policy entries are vetoed). Idempotent if not installed.';
+  const devs = Object.values(_devById).filter(d => !d.pending);
+  const sel = document.getElementById('mj-st');
+  sel.innerHTML = devs.map(d => `<option value="${d.client_id}">${esc(d.display_name || ('PIN ' + (d.device_pin || d.client_id.slice(0,8))))}</option>`).join('');
+  if (!devs.length) { mjSetMsg('no enrolled stations', true); document.getElementById('mj-go').disabled = true; }
+  else document.getElementById('mj-go').disabled = false;
+  document.getElementById('mj-msg').textContent = '';
+  document.getElementById('mj-go').textContent = action === 'install' ? 'queue install' : 'queue uninstall';
+  document.getElementById('mj-modal').hidden = false;
+}
+function mjClose(){ document.getElementById('mj-modal').hidden = true; _mj = null; }
+async function mjGo(){
+  if (!_mj) return;
+  const url = _mj.action === 'install' ? '/api/master-install' : '/api/master-uninstall';
+  try {
+    const r = await fetch(url, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({app_id:_mj.appId, client_id:document.getElementById('mj-st').value})});
+    const j = await r.json();
+    if (j.ok) { mjSetMsg(`queued — ${j.queued} station(s)${j.skipped ? `, ${j.skipped} skipped (${(j.reasons||[]).join('; ')})` : ''}`); refresh(); setTimeout(mjClose, 1100); }
+    else mjSetMsg(j.error || j.message || 'failed', true);
+  } catch { mjSetMsg('server unreachable', true); }
+}
+async function mjPush(appId){
+  const g = _mlCache.find(x => (x.app_id||'') === appId) || {};
+  const name = g.display_name || g.game_id;
+  const n = Object.values(_devById).filter(d => !d.pending).length;
+  const okPush = confirm(`Push "${name}" — queue a Steam install on ALL ${n} enrolled station(s)?`);
+  if (!okPush) return;
+  const msg = document.getElementById('ma-msg');
+  try {
+    const r = await fetch('/api/master-install', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({app_id:appId})});
+    const j = await r.json();
+    if (j.ok){ msg.textContent = `pushed ${name}: ${j.queued} queued, ${j.skipped} skipped${j.reasons&&j.reasons.length?' — '+j.reasons.join('; '):''}`; msg.style.color = 'var(--ok)'; }
+    else { msg.textContent = j.error || j.message || 'failed'; msg.style.color = 'var(--bad)'; }
+  } catch { msg.textContent = 'server unreachable'; msg.style.color = 'var(--bad)'; }
+  refresh();
+}
+async function mjRemove(appId){
+  const g = _mlCache.find(x => (x.app_id||'') === appId || x.game_id === appId) || {};
+  const name = g.display_name || g.game_id || appId;
+  const okDel = confirm(`Remove "${name}" from the MASTER LIST only? Installed copies are untouched; stations will re-flag the game as unmanaged.`);
+  if (!okDel) return;
+  const msg = document.getElementById('ma-msg');
+  try {
+    const r = await fetch('/api/master-remove', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({app_id:appId})});
+    const j = await r.json();
+    if (j.ok){ msg.textContent = `removed ${name} from master list (manifest v${j.manifest_version})`; msg.style.color = 'var(--ok)'; }
+    else { msg.textContent = j.error || j.message || 'failed'; msg.style.color = 'var(--bad)'; }
+  } catch { msg.textContent = 'server unreachable'; msg.style.color = 'var(--bad)'; }
+  refresh();
 }
 
 let _devById = {};
