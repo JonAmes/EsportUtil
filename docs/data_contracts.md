@@ -286,3 +286,13 @@ Pairing priority on the server: an AppID tag **outranks** folder-name id matchin
 `CS2` tagged `730` pairs with the master entry `counter_strike_2`/AppID 730 — no `unmanaged_game`,
 no `missing_from_machine`, version diff still enforced. `master-install` path resolution also
 follows the tagged copy. The field is optional: reports from older agents behave exactly as before.
+
+## 🧬 14. Agent capability gate (§verb-gate — T44)
+Master-verb queueing (install/push/uninstall) reads each target's reported agent_version BEFORE
+enqueueing. remove_game and the null-path "default Steam library" install fallback both shipped in
+agent **0.5.12**; older agents fail them cryptically (0.5.11 threw "missing install path"). The
+server now SKIPS such a station at queue time with reason "agent X too old for this verb — needs
+0.5.12+ (self-update pending)" rather than queueing a doomed job. Unparseable/absent versions stay
+optimistic (the agent's own unknown-job-kind refusal is the backstop). Report summaries (agent
+version + game counts) are hydrated from stored reports at server startup so the version chip and
+the gate survive a restart without waiting for each station to re-report.
