@@ -4,7 +4,7 @@ using EsportsUtil.Core;
 
 namespace EsportsUtil.Agent;
 
-public sealed record AgentIdentity(string ClientId, string DevicePin);
+public sealed record AgentIdentity(string ClientId, string DevicePin, int RotateSalt = 0);
 
 /// <summary>Agent identity: a persisted GUID client_id plus the immutable 4-digit DevicePin,
 /// deterministically minted from machine identity (same rule on every OS).</summary>
@@ -19,23 +19,53 @@ public static class Identity
             var id = Wire.FromJson<AgentIdentity>(File.ReadAllText(path));
             if (id is not null) return id;
         }
-        var clientId = Guid.NewGuid().ToString();
-        var seed = Environment.MachineName + "|" + (Environment.GetEnvironmentVariable("ESU_HW_SEED") ?? MachineSeed());
-        var pin = DerivePin(seed);
-        var idNew = new AgentIdentity(clientId, pin);
-        File.WriteAllText(path, Wire.ToJson(idNew));
-        return idNew;
+        return Mint(dataDir, 0);
     }
 
-    /// <summary>Offboarded by the operator: burn the persisted client_id and mint a fresh one.
-    /// The PIN is deterministically re-derived from the same machine seed, so the machine keeps
-    /// its human-recognizable badge and re-enters pairing as a NEW pending device.</summary>
+    /// <summary>OFFBOARDING ONLY (403 'offboarded'): burn the tombstoned client_id and mint a new
+    /// one. The PIN is deterministically re-derived from the same machine seed, so the machine keeps
+    /// its human-recognizable badge and re-enters pairing as a NEW pending device. The salt advances
+    /// so deterministic re-mints can never be permanently pinned by the tombstone.</summary>
     public static AgentIdentity Rotate(string dataDir)
     {
         var path = Path.Combine(dataDir, "esportsutil.identity.json");
-        try { if (File.Exists(path)) File.Delete(path); }
+        var salt = 1;
+        try
+        {
+            if (File.Exists(path))
+            {
+                var old = Wire.FromJson<AgentIdentity>(File.ReadAllText(path));
+                if (old is not null) salt = old.RotateSalt + 1;
+                File.Delete(path);
+            }
+        }
         catch (IOException) { }
-        return LoadOrCreate(dataDir);
+        return Mint(dataDir, salt);
+    }
+
+    /// <summary>T37: a MISSING identity file (data dir moved with the EXE, fresh install) re-mints
+    /// the SAME client_id on the same machine — deterministic from machine name + hardware seed.
+    /// Agent updates/folder moves are invisible to the server: the device is simply known again.
+    /// Collisions need the same PC name AND same model — in a venue that means an image-clone bug.
+    /// A persisted file always wins, so pre-T37 random ids and rotated ids stay untouched.</summary>
+    private static AgentIdentity Mint(string dataDir, int salt)
+    {
+        var seed = Environment.MachineName + "|" + (Environment.GetEnvironmentVariable("ESU_HW_SEED") ?? MachineSeed());
+        var id = new AgentIdentity(
+            DeterministicId(salt == 0 ? seed : seed + "|rotate-" + salt),
+            DerivePin(seed), salt);
+        File.WriteAllText(Path.Combine(dataDir, "esportsutil.identity.json"), Wire.ToJson(id));
+        return id;
+    }
+
+    public static string DeterministicId(string seed)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("esportsutil-client|" + seed));
+        var b = new byte[16];
+        System.Array.Copy(hash, b, 16);
+        b[6] = (byte)((b[6] & 0x0F) | 0x50);   // name-based UUID shape
+        b[8] = (byte)((b[8] & 0x3F) | 0x80);
+        return new Guid(b).ToString();
     }
 
     private static string MachineSeed()

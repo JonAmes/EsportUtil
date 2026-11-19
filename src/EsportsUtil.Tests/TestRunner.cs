@@ -1400,6 +1400,48 @@ Check(t36Schema.Contains("\"installed_apps\"") && t36Schema.Contains("names only
     "T36l factory-entry schema carries display_name + installed_apps and states versions are out of scope");
 
 
+// ---------- T37: deterministic identity — updates/moves never mint a new device ----------
+{
+    var prevSeed = Environment.GetEnvironmentVariable("ESU_HW_SEED");
+    try
+    {
+        Environment.SetEnvironmentVariable("ESU_HW_SEED", "t37-box-A");
+        var dir1 = Path.Combine(tmp, "t37-dir1");
+        var dir2 = Path.Combine(tmp, "t37-dir2");           // EXE+config MOVED elsewhere: fresh empty data dir
+        var m1 = Identity.LoadOrCreate(dir1);
+        var m2 = Identity.LoadOrCreate(dir2);
+        Check(Guid.TryParse(m1.ClientId, out _) && m1.ClientId == m2.ClientId && m1.DevicePin == m2.DevicePin,
+            "T37a lost identity dir re-mints the SAME client_id+PIN on the same machine — update/move invisible to the server");
+        Check(m1.ClientId == Identity.DeterministicId(Environment.MachineName + "|t37-box-A"),
+            "T37b minted client_id is SHA-derived from machine name + hardware seed");
+        Environment.SetEnvironmentVariable("ESU_HW_SEED", "t37-box-B");
+        var m3 = Identity.LoadOrCreate(Path.Combine(tmp, "t37-dir3"));
+        Check(m3.ClientId != m1.ClientId, "T37c a different machine still gets its own id (no cross-station collision)");
+        Environment.SetEnvironmentVariable("ESU_HW_SEED", "t37-box-A-seed-drift");
+        var m4 = Identity.LoadOrCreate(dir1);
+        Check(m4.ClientId == m1.ClientId && m4.DevicePin == m1.DevicePin,
+            "T37d persisted identity always wins, even if the hardware seed later drifts (WMI flake)");
+        var rot1 = Identity.Rotate(dir1);
+        Check(rot1.ClientId != m1.ClientId && Identity.LoadOrCreate(dir1).ClientId == rot1.ClientId,
+            "T37e offboard Rotate burns the id (salt advance) and the rotated id persists");
+        var rot2 = Identity.Rotate(dir1);
+        Check(rot2.ClientId != rot1.ClientId && rot2.DevicePin == rot1.DevicePin,
+            "T37f re-rotation keeps advancing — a tombstone can never pin a machine forever; PIN badge kept");
+        Environment.SetEnvironmentVariable("ESU_HW_SEED", "t37-box-A");
+        var cfgDir = Path.Combine(tmp, "t37-cfg");
+        Directory.CreateDirectory(cfgDir);
+        var cfgPath = Path.Combine(cfgDir, "esportsutil.config.json");
+        File.WriteAllText(cfgPath, Wire.ToJson(new EsportsConfig { Role = "agent", DataDir = "mydata" }));
+        var c9 = EsportsConfig.Load(cfgPath);
+        c9.ResolveDataDir(cfgPath);
+        Check(c9.DataDir == Path.Combine(cfgDir, "mydata"),
+            "T37g relative data_dir binds to the config FILE, never the launch CWD");
+        Check(Identity.LoadOrCreate(c9.DataDir).ClientId == m1.ClientId,
+            "T37h the config-bound data dir carries the same machine identity");
+    }
+    finally { Environment.SetEnvironmentVariable("ESU_HW_SEED", prevSeed); }
+}
+
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");
 return failed;

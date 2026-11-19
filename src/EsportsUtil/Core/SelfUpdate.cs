@@ -175,8 +175,10 @@ public static class SelfUpdateWatch
                 return;
             }
             // Handoff: the NEW staged exe waits for us to exit, replaces the old path, relaunches tray.
+            // T37: pin the working dir to the EXE's folder so the relaunched agent resolves the
+            // same relative paths (config, data) no matter where the old process was launched from.
             Process.Start(new ProcessStartInfo(stage, string.Join(' ', FinalizeArgs(target, Environment.ProcessId)))
-            { UseShellExecute = false });
+            { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(target)! });
             Last = Last! with { State = "restarting", Error = null };
             await Task.Delay(750, CancellationToken.None);  // let the beat flush its report
             Environment.Exit(0);
@@ -228,7 +230,7 @@ public static class SelfUpdateWatch
             await Task.Delay(250);
         }
         File.Copy(stage, targetExe, overwrite: true);
-        Process.Start(new ProcessStartInfo(targetExe, "--tray") { UseShellExecute = false });
+        Process.Start(new ProcessStartInfo(targetExe, "--tray") { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(targetExe)! });
         try { File.Delete(stage); } catch (IOException) { }
         return 0;
     }

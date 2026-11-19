@@ -182,3 +182,19 @@ key and speaks again on its own. Dismissed findings are excluded from the
 never (re-)fire the `compliance` alert. The dashboard header shows ONE orange
 pill `⚠ N issues` (replaces the old out-of-sync stat tile); clicking it jumps
 to the Device Fleet section where each affected row offers `clear`.
+
+## 🪪 9. Agent Identity & Update Durability (§identity — T37)
+
+`<data_dir>/esportsutil.identity.json` holds `{client_id, device_pin, rotate_salt}`.
+- **client_id** (T37): when the file is missing (data dir moved with the EXE, fresh install) the
+  agent re-mints a **deterministic** client_id = SHA-256(`"esportsutil-client|" + machineName +
+  "|" + hardware-seed`) shaped as a name-based UUID — the SAME id on the same machine. Updating
+  the agent EXE or moving its folder therefore never surfaces a new device; the server simply
+  recognizes its own client again. A collision would require the same PC name AND model (an
+  image-clone bug). A persisted file always wins, so pre-T37 random ids are untouched.
+- **device_pin**: unchanged rule — minted once from the machine seed and then persisted.
+- **rotate_salt**: operator offboarding (`403 offboarded`) rotates the identity; each Rotate
+  increments the salt so a deterministic re-mint can never be permanently pinned by the tombstone.
+- **data_dir resolution** (T37): a RELATIVE `data_dir` in `esportsutil.config.json` binds to the
+  config FILE's directory, never the launch CWD; the self-update handoff relaunches with
+  WorkingDirectory = the EXE's folder. Absolute `data_dir` (wizard default) is untouched.

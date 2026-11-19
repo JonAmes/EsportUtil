@@ -148,6 +148,7 @@ else
     cfg = EsportsConfig.Load(foundConfig);
     cfg.ApplyRoleOverride(roleFlag);
 }
+if (cfg is not null) cfg.ResolveDataDir(foundConfig);   // T37: relative data_dir binds to the config file, not the CWD
 Directory.CreateDirectory(cfg.DataDir);
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };

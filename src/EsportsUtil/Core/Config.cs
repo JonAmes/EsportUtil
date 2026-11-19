@@ -6,6 +6,16 @@ namespace EsportsUtil.Core;
 /// operator-tunable resource budgets from PLAN.md.</summary>
 public sealed class EsportsConfig
 {
+    /// <summary>T37: a RELATIVE data_dir binds to the config FILE's directory, never the launch
+    /// CWD — an EXE moved or relaunched from elsewhere keeps its identity/PIN/state where the
+    /// operator put them. Absolute data_dir values (wizard default, examples) are untouched.</summary>
+    public void ResolveDataDir(string? configPath)
+    {
+        if (configPath is not null && !Path.IsPathRooted(DataDir))
+            DataDir = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(Path.GetFullPath(configPath))!, DataDir));
+    }
+
     public string Role { get; set; } = "agent";                 // server | agent
     public string ServerUrl { get; set; } = "";                  // "" = role default: server binds 0.0.0.0, agent loopback
     public int Port { get; set; } = 4300;                        // server API + dashboard bind port
