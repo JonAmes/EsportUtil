@@ -127,7 +127,7 @@ if (foundConfig is null && roleFlag is null && lifecycle.Mode != RunMode.Service
         picked = FirstRunDialog.Run();
     else
 #endif
-        picked = ConsoleSetupWizard();
+        picked = await ConsoleSetupWizard();
     if (picked is null)
     {
         Console.WriteLine("setup cancelled — no config written, exiting.");
@@ -201,7 +201,7 @@ static void EnsureRunKey()
 }
 #endif
 
-static (string role, string? url)? ConsoleSetupWizard()
+static async Task<(string role, string? url)?> ConsoleSetupWizard()
 {
     Console.WriteLine("What should this PC run?");
     Console.WriteLine("  1 = SERVER  (venue control machine — dashboard + fleet jobs)");
@@ -210,6 +210,22 @@ static (string role, string? url)? ConsoleSetupWizard()
     var choice = Console.ReadLine()?.Trim();
     if (choice is not ("1" or "2")) return null;
     if (choice == "1") return ("server", null);
+    // T35: autodetect first — the operator should never have to dig out the server's IP.
+    Console.WriteLine("searching the LAN for esportsutil servers (~2 s)…");
+    var found = await Discovery.DetectAsync(Discovery.DefaultPort, 2000);
+    foreach (var r in found)
+        Console.WriteLine($"  found server: {r.ServerUrl}  (build v{r.Version})");
+    if (found.Count > 0)
+    {
+        Console.Write($"press Enter to use {found[0].ServerUrl}, or type another address: ");
+        var input = Console.ReadLine();
+        if (string.IsNullOrWhiteSpace(input)) return ("agent", found[0].ServerUrl);
+        var typed = FirstRunSetup.NormalizeServerUrl(input);
+        if (typed is not null) return ("agent", typed);
+        Console.WriteLine("  that doesn't look like an address — using the detected server");
+        return ("agent", found[0].ServerUrl);
+    }
+    Console.WriteLine("no esportsutil server answered on the LAN — type its address instead.");
     while (true)
     {
         Console.Write("server address (IP or http://host:port, blank to cancel): ");

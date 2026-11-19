@@ -1,5 +1,7 @@
 {
   "role": "server",
   "server_url": "http://0.0.0.0:4300",
-  "data_dir": "C:\\ProgramData\\EsportsUtil\\server"
+  "data_dir": "C:\\ProgramData\\EsportsUtil\\server",
+  "discovery_port": 4301,
+  "bootstrap_operator": { "username": "venueadmin", "password": "CHANGE-ME — seeds operators.json once on first start, then delete this key" }
 }

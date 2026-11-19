@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -1189,6 +1190,122 @@ Check(AgentInfo.Version == SelfUpdateWatch.CurrentVersion && AgentInfo.Version !
     "T34d agent reports/heartbeats carry the REAL build version, not the old 0.1.0 protocol constant");
 cts6.Cancel(); await loopTask6; await app5b.StopAsync();
 
+// ---------- T35: operator sign-in + LAN autodetection ----------
+// Pure hashing: the stored recipe verifies, anything else does not, plaintext never appears.
+var pwh = EsportsUtil.Server.PasswordHash.Create("hunter2!");
+Check(EsportsUtil.Server.PasswordHash.Verify("hunter2!", pwh) &&
+      !EsportsUtil.Server.PasswordHash.Verify("hunter3!", pwh) &&
+      !EsportsUtil.Server.PasswordHash.Verify("hunter2!", "garbage") &&
+      !EsportsUtil.Server.PasswordHash.Verify("", pwh) &&
+      pwh.StartsWith("pbkdf2-sha256$100000$") && !pwh.Contains("hunter2"),
+    "T35a PBKDF2 recipe verifies exactly; tampered/malformed input never verifies; no plaintext in the hash");
+// Pure discovery helpers.
+var dreply = EsportsUtil.Core.Discovery.ParseReply(
+    "{\"service\":\"esportsutil\",\"server_url\":\"http://10.140.0.212:4300/\",\"version\":\"0.5.5\"}");
+Check(dreply is { ServerUrl: "http://10.140.0.212:4300", Version: "0.5.5" } &&
+      EsportsUtil.Core.Discovery.ParseReply("{\"service\":\"other\"}") is null &&
+      EsportsUtil.Core.Discovery.ParseReply("not json") is null,
+    "T35b discovery replies parse, foreign/malformed payloads are ignored");
+Check(EsportsUtil.Core.Discovery.ResolveAdvertiseUrl("http://0.0.0.0:4300",
+          System.Net.IPAddress.Parse("10.140.0.212"), 4300) == "http://10.140.0.212:4300" &&
+      EsportsUtil.Core.Discovery.ResolveAdvertiseUrl("http://venue.tailnet.ts:4300",
+          System.Net.IPAddress.Parse("10.140.0.212"), 4300) == "http://venue.tailnet.ts:4300",
+    "T35c wildcard-bound server advertises the probe's own interface; explicit host advertises as-is");
+Check(EsportsUtil.Core.Discovery.BroadcastTargets().Contains(System.Net.IPAddress.Broadcast),
+    "T35d probe fan-out always includes the global broadcast");
+// Login throttle: five strikes on a key lock it, a good login resets another key.
+var guard = new EsportsUtil.Server.LoginGuard();
+for (var i = 0; i < 5; i++) { guard.Fail("k"); }
+Check(guard.Locked("k") && !guard.Locked("other"),
+    "T35e five failed sign-ins lock that (ip,user) key only");
+guard.Pass("k");
+Check(!guard.Locked("k"), "T35f a successful sign-in clears the strike count");
+
+// End-to-end on a FRESH server: open -> first operator arms the gate -> removal disarms it.
+var t35Port = 4401; var t35Url = $"http://127.0.0.1:{t35Port}";
+var t35Cfg = new EsportsConfig { Role = "server", ServerUrl = t35Url, DataDir = Path.Combine(tmp, "t35") };
+using var t35App = ServerRole.BuildApp(t35Cfg); await t35App.StartAsync();
+using var nc = new System.Net.Http.HttpClient(new System.Net.Http.HttpClientHandler { UseCookies = false, AllowAutoRedirect = false });
+Check((await nc.GetAsync(t35Url + "/api/state")).StatusCode == System.Net.HttpStatusCode.OK &&
+      (await nc.GetAsync(t35Url + "/")).StatusCode == System.Net.HttpStatusCode.OK,
+    "T35g EMPTY operator store = fully open dashboard (live-server compatibility)");
+Check(JsonNode.Parse(await nc.GetStringAsync(t35Url + "/api/auth-status"))["auth_required"]!.GetValue<bool>() == false,
+    "T35h auth-status reports auth_required=false while no operator exists");
+var addResp = await nc.PostAsJsonAsync(t35Url + "/api/operators", new { username = "Alice", password = "s3cret!" }, Wire.Options);
+Check(addResp.StatusCode == System.Net.HttpStatusCode.OK, "T35i adding the first operator succeeds");
+Check((await nc.GetAsync(t35Url + "/api/state")).StatusCode == System.Net.HttpStatusCode.Unauthorized &&
+      (await nc.GetAsync(t35Url + "/")).StatusCode == System.Net.HttpStatusCode.Found,
+    "T35j with an operator present, API calls 401 and pages redirect to /login");
+Check((await nc.PostAsJsonAsync(t35Url + "/api/login", new { username = "alice", password = "nope" }, Wire.Options))
+        .StatusCode == System.Net.HttpStatusCode.Unauthorized,
+    "T35k wrong password is 401 (username is case-insensitive)");
+var locked = false;
+for (var i = 0; i < 6 && !locked; i++)   // strikes 1-4 free, strike 5 locks inside Fail
+    locked = (await nc.PostAsJsonAsync(t35Url + "/api/login", new { username = "ghost", password = "x" + i }, Wire.Options))
+        .StatusCode == System.Net.HttpStatusCode.TooManyRequests;
+Check(locked, "T35l repeated failures on one key trip the 429 cool-off");
+var okLogin = await nc.PostAsJsonAsync(t35Url + "/api/login", new { username = "alice", password = "s3cret!" }, Wire.Options);
+var cookie = okLogin.Headers.TryGetValues("Set-Cookie", out var sc)
+    ? sc.First(v => v.StartsWith("esu_session=")).Split(';')[0] : null;
+Check(okLogin.StatusCode == System.Net.HttpStatusCode.OK && cookie is not null, "T35m correct login sets the session cookie");
+nc.DefaultRequestHeaders.Add("Cookie", cookie!);
+Check((await nc.GetAsync(t35Url + "/api/state")).StatusCode == System.Net.HttpStatusCode.OK &&
+      JsonNode.Parse(await nc.GetStringAsync(t35Url + "/api/auth-status"))["signed_in"]!.GetValue<bool>() &&
+      JsonNode.Parse(await nc.GetStringAsync(t35Url + "/api/auth-status"))["username"]!.GetValue<string>() == "alice",
+    "T35n the session cookie opens the API and auth-status names the operator");
+Check((await nc.PostAsJsonAsync(t35Url + "/api/operators", new { username = "alice", password = "dup" }, Wire.Options))
+        .StatusCode == System.Net.HttpStatusCode.BadRequest,
+    "T35o duplicate usernames are rejected");
+var seedDir = Path.Combine(tmp, "t35seed");
+var seedCfg = new EsportsConfig { Role = "server", ServerUrl = "http://127.0.0.1:4403", DataDir = seedDir, DiscoveryPort = 0 };
+seedCfg.BootstrapOperator = new OperatorSeed { Username = "seedop", Password = "seedpass" };
+Check(!File.Exists(Path.Combine(seedDir, "operators.json")), "T35p no operators.json before the server ever starts");
+using var seedApp = ServerRole.BuildApp(seedCfg); await seedApp.StartAsync();
+Check(File.Exists(Path.Combine(seedDir, "operators.json")) &&
+      (await nc.PostAsJsonAsync(t35Url + "/api/login", new { username = "n/a", password = "n/a" }, Wire.Options)).StatusCode
+          == System.Net.HttpStatusCode.Unauthorized,
+    "T35q bootstrap_operator seeds operators.json exactly once at startup");
+Check(!File.ReadAllText(Path.Combine(seedDir, "operators.json")).Contains("seedpass"),
+    "T35r the seed password NEVER appears in operators.json (only the PBKDF2 recipe)");
+var seedLogin = await new System.Net.Http.HttpClient().PostAsJsonAsync("http://127.0.0.1:4403/api/login",
+    new { username = "seedop", password = "seedpass" }, Wire.Options);
+Check(seedLogin.StatusCode == System.Net.HttpStatusCode.OK, "T35s the seeded operator can sign in");
+await seedApp.StopAsync();
+seedCfg.BootstrapOperator = new OperatorSeed { Username = "seedop", Password = "changed!" };
+using var seedApp2 = ServerRole.BuildApp(seedCfg); await seedApp2.StartAsync();
+Check((await new System.Net.Http.HttpClient().PostAsJsonAsync("http://127.0.0.1:4403/api/login",
+        new { username = "seedop", password = "changed!" }, Wire.Options)).StatusCode
+        == System.Net.HttpStatusCode.Unauthorized,
+    "T35t a changed bootstrap_operator never re-seeds an existing store");
+await seedApp2.StopAsync();
+// LAN autodetection end-to-end: UDP probe in, reachable URL + build out.
+var discPort = 4402;
+var discCfg = new EsportsConfig { Role = "server", ServerUrl = "http://127.0.0.1:4403", DataDir = Path.Combine(tmp, "t35disc"), DiscoveryPort = discPort };
+using var discApp = ServerRole.BuildApp(discCfg); await discApp.StartAsync();
+using (var udp = new System.Net.Sockets.UdpClient())
+{
+    await udp.SendAsync(EsportsUtil.Core.Discovery.Probe, EsportsUtil.Core.Discovery.Probe.Length,
+        new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, discPort));
+    udp.Client.ReceiveTimeout = 3000;
+    var got = await udp.ReceiveAsync();
+    var drep = EsportsUtil.Core.Discovery.ParseReply(System.Text.Encoding.UTF8.GetString(got.Buffer));
+    Check(drep is { ServerUrl: "http://127.0.0.1:4403" } && drep.Version == SelfUpdateWatch.CurrentVersion,
+        "T35u discovery responder answers the probe with the reachable URL and real build");
+}
+Check(new EsportsConfig().DiscoveryPort == EsportsUtil.Core.Discovery.DefaultPort &&
+      new EsportsConfig { DiscoveryPort = 0 }.DiscoveryPort == 0,
+    "T35v discovery_port defaults to 4301 and 0 disables (seed server above ran with 0)");
+// UI seams (files on disk, same pattern as the T33 client check).
+string WwwRoot(string f) => File.ReadAllText(Path.GetFullPath(Path.Combine(
+    AppContext.BaseDirectory, "..", "..", "..", "..", "EsportsUtil", "wwwroot", f)));
+var t35Login = WwwRoot("login.html");
+var t35Dash = WwwRoot("dashboard.html");
+var t35Set = WwwRoot("settings.html");
+Check(t35Login.Contains("/api/login") && t35Dash.Contains("/login") && t35Dash.Contains("c-user") &&
+      t35Dash.Contains("status === 401"),
+    "T35w sign-in page exists; dashboard redirects on 401 and shows the operator chip");
+Check(t35Set.Contains("/api/operators") && t35Set.Contains("add operator"),
+    "T35x settings carries the operator management panel");
 
 Directory.Delete(tmp, true);
 Console.WriteLine($"\n{(failed == 0 ? "ALL TESTS PASSED" : $"{failed} TEST(S) FAILED")}");

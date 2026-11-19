@@ -44,8 +44,15 @@ public static class ServerRole
         var issueHashes = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
         var jobs = new JobStore(cfg.DataDir);
         var venueLogo = new VenueLogo(cfg.DataDir);
+        // T35: per-operator accounts gate the dashboard. Empty store = today's open server.
+        var ops = new OperatorsStore(cfg.DataDir);
+        ops.BootstrapFromConfig(cfg);
+        var sessions = new SessionStore();
+        var loginGuard = new LoginGuard();
 
         builder.Services.AddHostedService(_ => new LivenessMonitor(registry, hub, cfg.HeartbeatTimeoutSec));
+        builder.Services.AddHostedService(sp => new DiscoveryResponder(cfg,
+            (logs ?? sp.GetRequiredService<ILoggerFactory>()).CreateLogger("esportsutil.discovery")));
 
         // Phase 3 — hosted notification daemon drains the queue; Windows toast on the server box, console on dev.
         INotifier notifier =
@@ -59,6 +66,27 @@ public static class ServerRole
 
         var app = builder.Build();
         var log = (logs ?? app.Services.GetRequiredService<ILoggerFactory>()).CreateLogger("esportsutil.server");
+
+        // ---- T35: sign-in gate. Engages ONLY once an operator account exists, so the live open
+        //      server changes not one byte until someone adds the first account. Agent traffic
+        //      (register/heartbeat/report/job_update/factory-state/content) is NEVER gated —
+        //      the fleet authenticates by client_id + operator pairing, not by web session. ----
+        static bool OpenPath(string p) =>
+            p is "/login" or "/api/login" or "/api/logout" or "/api/auth-status"
+              or "/api/register" or "/api/heartbeat" or "/api/report" or "/api/job_update" or "/api/factory-state"
+            || p.StartsWith("/content/", StringComparison.Ordinal);
+        app.Use(async (ctx, next) =>
+        {
+            if (!ops.Any()) { await next(); return; }
+            var p = ctx.Request.Path.Value ?? "/";
+            if (OpenPath(p)) { await next(); return; }
+            var tok = ctx.Request.Cookies[SessionStore.CookieName];
+            if (!string.IsNullOrEmpty(tok) && sessions.Touch(tok!)) { await next(); return; }
+            if (p.StartsWith("/api/", StringComparison.Ordinal))
+                await Results.Json(new AckEnvelope(false, "sign-in required"), Wire.Options, statusCode: 401).ExecuteAsync(ctx);
+            else
+                ctx.Response.Redirect("/login");   // 302 the page to the sign-in card
+        });
 
         // ---- onboarding gate ----
         app.MapPost("/api/register", (RegisterRequest req) =>
@@ -186,6 +214,66 @@ public static class ServerRole
 
         // ---- factory state pull ----
         app.MapGet("/api/factory-state", () => Results.Json(manifests.LoadMaster().FactoryStateMap, Wire.Options));
+
+        // ---- T35: operator sign-in + account management ----
+        app.MapPost("/api/login", (LoginRequest req, HttpContext ctx, HttpResponse res) =>
+        {
+            var key = (ctx.Connection.RemoteIpAddress?.ToString() ?? "?") + "|" + (req.Username ?? "").Trim().ToLowerInvariant();
+            if (loginGuard.Locked(key))
+                return Results.Json(new AckEnvelope(false, "too many failed sign-ins — wait a minute"), Wire.Options, statusCode: 429);
+            var user = ops.Verify(req.Username, req.Password);
+            if (user is null)
+            {
+                loginGuard.Fail(key);
+                return Results.Json(new AckEnvelope(false, "wrong username or password"), Wire.Options, statusCode: 401);
+            }
+            loginGuard.Pass(key);
+            var token = sessions.NewToken();
+            sessions.Add(token, user);
+            res.Cookies.Append(SessionStore.CookieName, token, new CookieOptions
+            { HttpOnly = true, SameSite = SameSiteMode.Lax, Path = "/", MaxAge = SessionStore.Ttl });
+            return Results.Json(new { ok = true, username = user }, Wire.Options);
+        });
+        app.MapPost("/api/logout", (HttpContext ctx, HttpResponse res) =>
+        {
+            var tok = ctx.Request.Cookies[SessionStore.CookieName];
+            if (!string.IsNullOrEmpty(tok)) sessions.Revoke(tok!);
+            res.Cookies.Delete(SessionStore.CookieName, new CookieOptions { Path = "/" });
+            return Results.Json(new AckEnvelope(true), Wire.Options);
+        });
+        app.MapGet("/api/auth-status", (HttpContext ctx) =>
+        {
+            var tok = ctx.Request.Cookies[SessionStore.CookieName];
+            var user = string.IsNullOrEmpty(tok) ? null : sessions.User(tok!);
+            return Results.Json(new { auth_required = ops.Any(), signed_in = user is not null, username = user }, Wire.Options);
+        });
+        app.MapGet("/api/operators", () => Results.Json(new { ok = true, operators = ops.Usernames() }, Wire.Options));
+        app.MapPost("/api/operators", (OperatorAddRequest req) =>
+        {
+            var wasOpen = !ops.Any();
+            if (!ops.Add(req.Username, req.Password, out var e))
+                return Results.Json(new AckEnvelope(false, e), Wire.Options, statusCode: 400);
+            if (wasOpen)   // the FIRST account is the moment the dashboard stops being open LAN-wide
+                _ = hub.PublishAsync(new Alert("auth_enabled", "info",
+                    "dashboard now requires operator sign-in", null, null, DateTimeOffset.UtcNow));
+            return Results.Json(new AckEnvelope(true), Wire.Options);
+        });
+        app.MapPost("/api/operators/password", (OperatorPasswordRequest req) =>
+        {
+            if (!ops.SetPassword(req.Username, req.Password, out var e))
+                return Results.Json(new AckEnvelope(false, e), Wire.Options, statusCode: 400);
+            sessions.RevokeUser(req.Username.Trim().ToLowerInvariant());   // old sessions die with the old password
+            return Results.Json(new AckEnvelope(true), Wire.Options);
+        });
+        app.MapDelete("/api/operators/{username}", (string username) =>
+        {
+            var user = username.Trim().ToLowerInvariant();
+            if (!ops.Remove(username))
+                return Results.Json(new AckEnvelope(false, "unknown operator"), Wire.Options, statusCode: 404);
+            sessions.RevokeUser(user);
+            _ = hub.PublishAsync(new Alert("operator_removed", "warn", $"operator '{user}' removed", null, null, DateTimeOffset.UtcNow));
+            return Results.Json(new AckEnvelope(true), Wire.Options);
+        });
 
         // ---- operator controls (dashboard) ----
         app.MapPost("/api/rename", (RenameRequest req) =>
@@ -565,6 +653,10 @@ public static class ServerRole
         });
 
         // ---- dashboard HTML (served by the EXE, rendered in Edge) ----
+        var loginPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "login.html");
+        app.MapGet("/login", () => File.Exists(loginPath)
+            ? Results.Content(File.ReadAllText(loginPath), "text/html")
+            : Results.Text("login.html missing next to esportsutil"));
         var dashPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "dashboard.html");
         app.MapGet("/", () => File.Exists(dashPath)
             ? Results.Content(File.ReadAllText(dashPath), "text/html")

@@ -119,3 +119,42 @@ manifest (`machine_model`, `games`, `duplicates`) and the last 20 executed
 server-issued jobs (`recent_jobs`). It is a view, not a control plane: no
 endpoint here mutates fleet state, and closing the page never pauses
 registration, heartbeat, reporting, jobs or repairs.
+
+## 🔐 7. Operator Sign-in & LAN Autodetection (§auth — T35)
+
+**Operator accounts** live in `<dataDir>/operators.json` — a JSON array of
+`{username, password_hash}`. `username` is stored lowercased; `password_hash` is
+the self-describing PBKDF2 recipe `pbkdf2-sha256$<iters>$<b64-salt>$<b64-hash>`
+(SHA-256, 100 000 iterations, per-account 16-byte salt, constant-time verify).
+Plaintext is never persisted. Config `bootstrap_operator` `{username,password}`
+is imported into that store **once**, only while it is empty — after that the
+store is the source of truth and the config value is ignored.
+
+**Auth model** — the gate engages only when the store is NON-empty; an empty
+store keeps today's fully-open LAN dashboard. When armed:
+- every `/api/*` call without a valid session returns `401 {ok:false,error:"sign-in required"}`;
+- every page (except `/login`) returns `302 → /login`;
+- agent traffic is NEVER gated: `register`, `heartbeat`, `report`, `job_update`
+  and `factory-state` stay open (fleet auth is client_id + pairing, not a web session).
+
+| Endpoint | Shape |
+|---|---|
+| `POST /api/login {username,password}` | `200 {ok:true,username}` + `Set-Cookie: esu_session` (HttpOnly, SameSite=Lax, 12 h sliding); `401` wrong creds; `429` throttled |
+| `POST /api/logout` | revokes session, deletes cookie |
+| `GET /api/auth-status` | `{auth_required, signed_in, username}` — always open, never 401 |
+| `GET /api/operators` | `{ok, operators:[username…]}` |
+| `POST /api/operators {username,password}` | `400` bad username (2–32 chars `[a-z0-9._-]`, must start alphanumeric) / short password (<6) / duplicate |
+| `POST /api/operators/password {username,password}` | change password, revokes that user's sessions |
+| `DELETE /api/operators/{username}` | removing the LAST operator disarms the gate again |
+
+Failed logins are throttled per `(ip, username)`: 5 strikes → 60 s cool-off (`429`).
+Sessions are random 32-byte tokens in the `esu_session` cookie (12 h sliding TTL,
+revoked in-memory on logout/password-change/operator-removal).
+
+**LAN autodetection** — UDP port `discovery_port` (default **4301**, `0` disables;
+bind collision = warn, never fatal). Agent wizard broadcasts the ASCII probe
+`ESU-DISCOVER` to `255.255.255.255` plus every NIC's directed broadcast; every
+server answers one JSON datagram:
+`{service:"esportsutil", server_url:"http://<reachable>:4300", version:"x.y.z"}`.
+A wildcard-bound server advertises the address of the very interface the probe
+arrived on, so multi-NIC boxes answer each requester with a directly reachable URL.

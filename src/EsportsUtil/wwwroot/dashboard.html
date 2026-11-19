@@ -147,6 +147,7 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
     <span class="logo" id="brand">E</span>
     <h1>E-Sports Dashboard</h1>
     <span class="chip mono" id="c-ver" title="server build" style="font-size:11px">v–</span>
+    <span class="chip" id="c-user" hidden title="signed-in operator — click to sign out" style="cursor:pointer"></span>
     <span class="chip">manifest <b id="c-manifest">–</b></span>
     <span class="chip mono">factory <b id="c-factory">–</b> entries</span>
     <a class="chip" href="/settings" style="text-decoration:none;color:var(--acc)">settings</a>
@@ -237,6 +238,9 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
   </div>
 </div>
 <script>
+// T35: any operator call answering 401 (no/expired session) bounces the page to the sign-in card.
+const _f0 = window.fetch;
+window.fetch = (...a) => _f0(...a).then(r => { if (r.status === 401) location.href = '/login'; return r; });
 async function api(path, body){
   const r = await fetch(path, body ? {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)} : {});
   return r.json();
@@ -447,6 +451,12 @@ setInterval(refresh, 3000);
 async function brand(){try{const s=await (await fetch('/api/settings')).json();if(s.logo)
   document.getElementById('brand').innerHTML=`<img src="/settings/logo?v=${s.logo.updated_unix}" alt="venue logo">`;}catch{}}
 brand();setInterval(brand, 60000);
+// T35: header chip shows the signed-in operator; clicking it signs out. (auth-status never 401s.)
+async function whoami(){try{const s=await (await fetch('/api/auth-status')).json();
+  const c=document.getElementById('c-user');
+  if(s.signed_in){c.hidden=false;c.textContent='\u{1F464} '+s.username;
+    c.onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.href='/login';};}}catch{}}
+whoami();
 </script>
 </body>
 </html>

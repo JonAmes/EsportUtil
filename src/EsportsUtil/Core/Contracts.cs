@@ -110,6 +110,12 @@ public sealed record ContentItem(string ContentId, string Filename, string Sha25
 
 public sealed record ContentManifest(int Version, DateTimeOffset UpdatedTimestamp, List<ContentItem> Items);
 
+// ---- T35: operator sign-in + accounts ----
+
+public sealed record LoginRequest(string Username, string Password);
+public sealed record OperatorAddRequest(string Username, string Password);
+public sealed record OperatorPasswordRequest(string Username, string Password);
+
 public static class Wire
 {
     public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)

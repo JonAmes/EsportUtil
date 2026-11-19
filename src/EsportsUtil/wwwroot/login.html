@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Operator sign-in — E-Sports Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+/* Same design tokens as the operator dashboard (mockup palette). */
+:root{color-scheme:dark;
+--bg:#0d0f14;--fg:#f7f8f8;--mut:#8a8f98;--acc:#6d8dff;
+--bdr:rgba(255,255,255,.08);--card:rgba(255,255,255,.03);
+--hair:color-mix(in srgb,var(--fg) 7%,transparent);--bad:#ef4444;}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:
+ radial-gradient(120% 90% at 85% -10%,rgba(27,20,48,.55),transparent 60%),
+ radial-gradient(100% 90% at -10% 110%,rgba(22,35,61,.5),transparent 60%),
+ var(--bg);
+ background-attachment:fixed;color:var(--fg);
+ font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;
+ display:flex;align-items:center;justify-content:center;padding:20px}
+.card{width:min(360px,100%);background:var(--card);border:1px solid var(--hair);
+ border-radius:14px;padding:26px 24px 22px;box-shadow:0 18px 50px rgba(0,0,0,.45)}
+.logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--acc),color-mix(in srgb,var(--acc) 45%,#22d3ee));
+ display:inline-flex;align-items:center;justify-content:center;font-weight:700;color:#fff;margin-bottom:14px}
+h1{font-size:17px;font-weight:590;letter-spacing:-.3px;margin:0 0 4px}
+.sub{color:var(--mut);font-size:12px;margin:0 0 18px}
+label{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--mut);margin:12px 0 4px}
+input{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--bdr);background:rgba(255,255,255,.04);
+ color:var(--fg);font:14px inherit}
+input:focus{outline:none;border-color:var(--acc)}
+button{margin-top:18px;width:100%;padding:10px;border-radius:8px;border:0;cursor:pointer;
+ background:var(--acc);color:#fff;font-weight:600;font-size:14px}
+button:disabled{opacity:.5;cursor:default}
+.err{color:var(--bad);font-size:12px;margin-top:12px;min-height:16px}
+.foot{margin-top:16px;color:var(--mut);font-size:11px;text-align:center}
+</style>
+</head>
+<body>
+<form class="card" id="f" autocomplete="on">
+  <div class="logo">E</div>
+  <h1>E-Sports Dashboard</h1>
+  <p class="sub">Operator sign-in required on this server.</p>
+  <label for="u">Username</label>
+  <input id="u" name="username" autocomplete="username" spellcheck="false" required>
+  <label for="p">Password</label>
+  <input id="p" name="password" type="password" autocomplete="current-password" required>
+  <div class="err" id="e"></div>
+  <button id="go" type="submit">Sign in</button>
+  <div class="foot">sessions expire after 12 hours</div>
+</form>
+<script>
+const f = document.getElementById('f'), e = document.getElementById('e'), go = document.getElementById('go');
+f.addEventListener('submit', async ev => {
+  ev.preventDefault();
+  e.textContent = ''; go.disabled = true; go.textContent = 'Signing in…';
+  try {
+    const r = await fetch('/api/login', {method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({username: document.getElementById('u').value,
+                            password: document.getElementById('p').value})});
+    if (r.ok) { location.href = '/'; return; }
+    const d = await r.json().catch(() => ({}));
+    e.textContent = d.error || ('sign-in failed (' + r.status + ')');
+  } catch { e.textContent = 'server unreachable'; }
+  go.disabled = false; go.textContent = 'Sign in';
+});
+document.getElementById('u').focus();
+</script>
+</body>
+</html>

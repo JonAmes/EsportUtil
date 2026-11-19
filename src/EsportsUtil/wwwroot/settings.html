@@ -72,6 +72,7 @@ button.rm:hover{color:var(--bad);border-color:var(--bad)}
     <span class="logo" id="brand">E</span>
     <h1>Settings</h1>
     <a class="back" href="/">← dashboard</a>
+    <a class="back" href="#" id="logout" hidden style="margin-left:auto"></a>
   </div>
 
   <div class="card">
@@ -132,9 +133,28 @@ button.rm:hover{color:var(--bad);border-color:var(--bad)}
       Riot Client self-update in place, so their status shows what is installed rather than a
       guess about currency; <b>update</b> re-runs the vendor's latest installer for any app.</div>
   </div>
+
+  <div class="card">
+    <h2>Operators</h2>
+    <p class="sub">Accounts that can sign in to the dashboard. While this list is empty the
+      dashboard stays open to the LAN — adding the first operator turns sign-in on; removing the
+      last one turns it off again. Passwords are stored only as salted hashes.</p>
+    <div id="ops-list"></div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <input id="op-u" placeholder="username" autocomplete="off" spellcheck="false"
+             style="flex:1;min-width:140px;padding:8px 10px;border-radius:8px;border:1px solid var(--bdr);background:rgba(255,255,255,.04);color:var(--fg)">
+      <input id="op-p" placeholder="password" type="password" autocomplete="new-password"
+             style="flex:1;min-width:140px;padding:8px 10px;border-radius:8px;border:1px solid var(--bdr);background:rgba(255,255,255,.04);color:var(--fg)">
+      <button class="rm" id="op-add" style="width:auto;padding:8px 14px">add operator</button>
+    </div>
+    <div class="msg" id="ops-msg" role="status"></div>
+  </div>
 </div>
 
 <script>
+// T35: any operator call answering 401 (no/expired session) bounces the page to the sign-in card.
+const _f0 = window.fetch;
+window.fetch = (...a) => _f0(...a).then(r => { if (r.status === 401) location.href = '/login'; return r; });
 // One reusable drag & drop image slot: same gate, same UX, different endpoint + meta key.
 function slot(o) {
   const drop = document.getElementById('drop-' + o.id), msg = document.getElementById('msg-' + o.id),
@@ -276,6 +296,47 @@ devSel.addEventListener('change', () => { selDev = devSel.value; renderApps(); }
     await new Promise(res => setTimeout(res, 3000));
   }
 })();
+
+// T35: operator accounts CRUD (the panel that turns dashboard sign-in on/off).
+async function loadOps() {
+  let ops = [];
+  try { ops = (await (await fetch('/api/operators')).json()).operators || []; } catch { }
+  document.getElementById('ops-list').innerHTML = ops.length
+    ? ops.map(u => '<div style="display:flex;align-items:center;gap:10px;margin:6px 0">' +
+        '<b class="mono">' + esc2(u) + '</b>' +
+        '<button class="rm" style="width:auto;padding:4px 10px" onclick="pwOp(\'' + esc2(u) + '\')">reset password</button>' +
+        '<button class="rm" style="width:auto;padding:4px 10px" onclick="rmOp(\'' + esc2(u) + '\')">remove</button></div>').join('')
+    : '<div class="sub" style="margin:8px 0">no operators yet — the dashboard is open to the LAN</div>';
+}
+const opsSay = (t, c) => { const m = document.getElementById('ops-msg'); m.textContent = t; m.className = 'msg' + (c ? ' ' + c : ''); };
+async function opCall(path, method, body) {
+  const r = await fetch(path, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const d = await r.json().catch(() => ({}));
+  opsSay(r.ok ? 'ok' : (d.error || ('rejected (HTTP ' + r.status + ')')), r.ok ? 'ok' : 'err');
+  await loadOps();
+  if (r.ok) whoami();   // first/last operator flips auth mode — refresh the header chip
+}
+document.getElementById('op-add').onclick = () => {
+  const u = document.getElementById('op-u').value.trim(), p = document.getElementById('op-p').value;
+  if (!u || !p) { opsSay('username and password are both required', 'err'); return; }
+  opCall('/api/operators', 'POST', { username: u, password: p });
+  document.getElementById('op-u').value = ''; document.getElementById('op-p').value = '';
+};
+async function rmOp(u) { if (confirm('remove operator ' + u + '?')) opCall('/api/operators/' + encodeURIComponent(u), 'DELETE'); }
+async function pwOp(u) { const p = prompt('new password for ' + u + ':'); if (p) opCall('/api/operators/password', 'POST', { username: u, password: p }); }
+loadOps();
+
+// T35: header sign-out link when a session exists.
+async function whoami() {
+  try {
+    const s = await (await fetch('/api/auth-status')).json();
+    const a = document.getElementById('logout');
+    a.hidden = !s.signed_in;
+    a.textContent = s.signed_in ? 'sign out (' + s.username + ')' : '';
+    a.onclick = async ev => { ev.preventDefault(); await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
+  } catch { }
+}
+whoami();
 </script>
 </body>
 </html>

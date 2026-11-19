@@ -22,6 +22,10 @@ public sealed class EsportsConfig
     public int AgentDashboardPort { get; set; } = 4310;          // loopback only; 0 = ephemeral (tests)
     public string SteamCmdPath { get; set; } = "steamcmd";       // agent-side updater executable (allow-listed handler only)
     public bool SteamCmdAutoInstall { get; set; } = true;        // bootstrap missing steamcmd via winget (Valve.SteamCMD)
+    // ---- dashboard sign-in (T35): accounts live in <data>/operators.json; this seeds that store once ----
+    public OperatorSeed? BootstrapOperator { get; set; }         // {username,password} imported only while the store is empty
+    // ---- LAN autodetection (T35): server answers UDP probes on this port; 0 disables ----
+    public int DiscoveryPort { get; set; } = Discovery.DefaultPort;
     // ---- self-update (T30): agent pulls the latest GitHub release of itself and restarts ----
     public int SelfUpdateCheckIntervalMin { get; set; } = 360;   // 0 disables timed checks (dashboard button still works)
     public bool SelfUpdateApply { get; set; } = true;            // download+verify+restart when a newer release exists
@@ -55,4 +59,12 @@ public sealed class EsportsConfig
         if (string.IsNullOrWhiteSpace(ServerUrl))
             ServerUrl = Role == "server" ? $"http://0.0.0.0:{Port}" : $"http://127.0.0.1:{Port}";
     }
+}
+
+/// <summary>T35: first-start convenience for the server config — imported into
+/// operators.json ONCE (only while that store is empty), never re-seeded after.</summary>
+public sealed class OperatorSeed
+{
+    public string Username { get; set; } = "";
+    public string Password { get; set; } = "";
 }

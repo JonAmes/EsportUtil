@@ -102,11 +102,33 @@ public static class FirstRunDialog
             _step1.BringToFront();
         }
 
-        private void ShowStep2()
+        private async void ShowStep2()
         {
             _step1.Visible = false;
             _step2.Visible = true;
             _url.Focus();
+            // T35: autodetect — probe the LAN the moment the operator picks AGENT so the address
+            // is usually already filled in; typing stays available as the fallback.
+            _status.ForeColor = Color.FromArgb(150, 155, 165);
+            _status.Text = "searching the LAN for esportsutil servers…";
+            List<EsportsUtil.Core.Discovery.Reply> found;
+            try
+            {
+                found = await EsportsUtil.Core.Discovery.DetectAsync(
+                    EsportsUtil.Core.Discovery.DefaultPort, 2000);
+            }
+            catch { found = new(); }
+            if (!IsHandleCreated) return;
+            if (found.Count > 0)
+            {
+                _url.Text = found[0].ServerUrl;
+                _status.ForeColor = Color.FromArgb(90, 230, 140);
+                _status.Text = found.Count == 1
+                    ? $"found {found[0].ServerUrl} (build v{found[0].Version}) — press SAVE, or type another address"
+                    : $"found {found.Count} servers — {found[0].ServerUrl} selected; type another to override";
+            }
+            else
+                _status.Text = "no server answered on the LAN — type its address";
         }
 
         private async void Save()
@@ -160,7 +182,8 @@ public static class FirstRunDialog
             {
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
                 using var resp = await http.GetAsync(url + "/api/state");
-                return resp.IsSuccessStatusCode;
+                // T35: a 401 means a server with sign-in enabled — that IS reachable.
+                return resp.IsSuccessStatusCode || resp.StatusCode == System.Net.HttpStatusCode.Unauthorized;
             }
             catch { return false; }
         }
