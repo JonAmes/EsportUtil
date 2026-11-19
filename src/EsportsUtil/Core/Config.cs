@@ -26,6 +26,7 @@ public sealed class EsportsConfig
     public int SlowScanIntervalMin { get; set; } = 15;           // never scan per-heartbeat
     public int UpdateScanIntervalMin { get; set; } = 360;        // Windows Update poll cadence; 0 = timer off (directives still work)
     public int LocateTtlSec { get; set; } = 30;
+    public string SteamcmdPath { get; set; } = "";               // T41: steamcmd binary for AppID lookups; "" = auto-locate
     public string Printer { get; set; } = "";                    // named Windows queue; "" = file fallback
     public bool ToastNotifications { get; set; } = true;         // Windows toast on the server box (Phase 3)
     public bool AgentDashboard { get; set; } = true;             // agent role serves the client view on localhost

@@ -189,6 +189,18 @@ tr.downed .dev .dot{background:var(--mut);box-shadow:none;animation:none}
     </table>
   </div>
 
+  <!-- T41: master-list box under the fleet view — Steam AppID -> steamcmd -> recorded game+build -->
+  <div class="sec" id="ma-box">
+    <div class="sec-h"><span class="t">Master List — add by Steam AppID</span><span class="rule"></span><span class="chip mono">steamcmd +app_info_print</span></div>
+    <div style="font-size:12px;opacity:.7;margin-bottom:8px">The server resolves the AppID with steamcmd and records the game name with its main depot BuildID. One entry per AppID — duplicates are rejected.</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="ma-app" class="mono" placeholder="Steam AppID e.g. 730" style="width:200px;padding:6px 8px;background:var(--card);border:1px solid var(--bdr);border-radius:6px;color:var(--fg);font-size:12.5px">
+      <button class="btn" id="ma-go" onclick="addGameByApp()">add game</button>
+      <span id="ma-msg" style="font-size:12px"></span>
+    </div>
+    <div id="ma-list" style="margin-top:10px"></div>
+  </div>
+
   <div id="jobstat"></div>
 
   <div class="sec">
@@ -405,6 +417,29 @@ async function showManifest(){
 }
 function closeManifest(){ document.getElementById('mf-modal').hidden = true; }
 
+// T41: master-list box under the fleet — server steamcmd-resolves the AppID and records
+// game name + main depot BuildID. 409 = already present (unique entries only), 502 = unresolvable.
+async function addGameByApp(){
+  const inp = document.getElementById('ma-app'), btn = document.getElementById('ma-go'), msg = document.getElementById('ma-msg');
+  const id = (inp.value||'').trim();
+  if(!/^\d{1,10}$/.test(id)){ msg.textContent = 'AppID must be digits'; msg.style.color = 'var(--bad)'; return; }
+  btn.disabled = true; btn.textContent = 'resolving…'; msg.textContent = '';
+  try {
+    const r = await fetch('/api/master-add', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({app_id:id})});
+    const j = await r.json();
+    if(j.ok){ msg.textContent = `recorded ${j.game} (AppID ${j.app_id} · build ${j.build_id})`; msg.style.color = 'var(--ok)'; inp.value=''; }
+    else { msg.textContent = j.error||j.message||'failed'; msg.style.color = 'var(--bad)'; }
+  } catch { msg.textContent = 'server unreachable'; msg.style.color = 'var(--bad)'; }
+  btn.disabled = false; btn.textContent = 'add game';
+  refresh();
+}
+async function renderMasterList(){
+  let ml; try { ml = (await (await fetch('/api/manifest')).json()).master_list || []; } catch { return; }
+  document.getElementById('ma-list').innerHTML = ml.length
+    ? ml.map(g => `<div style="font-size:12.5px;margin:2px 0">• <b>${esc(g.game_id)}</b> <span class="mono" style="opacity:.7">AppID ${esc(g.app_id||'—')} · build ${esc(g.latest_version)} · ${esc(g.launcher||'steam')}</span></div>`).join('')
+    : '<div style="opacity:.6;font-size:12.5px">master list is empty — add a Steam AppID above; the manifest chip shows the full list</div>';
+}
+
 let _devById = {};
 // Offboarding is permanent (identity tombstoned), so a bare confirm() is too easy to blow through:
 // a modal requires the station's 4-digit PIN to be RE-TYPED before the call fires.
@@ -499,6 +534,7 @@ async function refresh(){
   document.getElementById('c-manifest').textContent = d.manifest_version;
   document.getElementById('c-ver').textContent = 'v' + (d.server_version || '?');
   document.getElementById('c-factory').textContent = d.factory_entries;
+  renderMasterList();
 
   const fixable = d.devices.reduce((n, x) => n + ((x.issues||[]).length), 0);
   const cp = document.getElementById('c-compliance');

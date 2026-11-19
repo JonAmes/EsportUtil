@@ -1547,6 +1547,69 @@ Check(t36Schema.Contains("\"installed_apps\"") && t36Schema.Contains("names only
           dash10.Contains("fetch('/api/manifest')") && dash10.Contains("managed games"),
         "T40b the manifest chip is clickable and opens a real browse modal (games + baselines + stamp) — no more pill that does nothing");
 
+    // ---------- T41: master-list add by Steam AppID — steamcmd resolves, records unique entries ----------
+    var unit41 = SteamInfo.Parse("""
+"730"
+(
+		"name"		"Counter-Strike 2"
+		"depots"
+		(
+			"731"
+			(
+				"buildid"		"1111"
+			)
+			"730"
+			(
+				"buildid"		"2222"
+			)
+		)
+)
+""", "730");
+    Check(unit41 is { Name: "Counter-Strike 2", BuildId: "2222" },
+        "T41a VDF parse takes the app name + the MAIN depot buildid (depot key == AppID), not the first depot and not an awk field slot");
+    var fake41 = Path.Combine(Path.GetTempPath(), $"esu_fake_steam_{Guid.NewGuid():N}.sh");
+    File.WriteAllText(fake41, """
+#!/bin/sh
+printf '"730"\n(\n\t\t"name"\t\t"Counter-Strike 2"\n\t\t"depots"\n\t\t(\n\t\t\t"730"\n\t\t\t(\n\t\t\t\t"buildid"\t\t"987654"\n\t\t\t)\n\t\t)\n)\n'
+""");
+    Environment.SetEnvironmentVariable("ESU_FAKE_STEAMCMD", fake41);
+    File.SetUnixFileMode(fake41, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                                UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                                UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+    var add41 = await Api9("/api/master-add", new MasterAddRequest("730"));
+    Check(add41.code == 200 && add41.json["game"]!.GetValue<string>() == "Counter-Strike 2" &&
+          add41.json["app_id"]!.GetValue<string>() == "730" && add41.json["build_id"]!.GetValue<string>() == "987654",
+        "T41b POST /api/master-add runs the steamcmd lookup and returns the resolved game + AppID + BuildID");
+    var mf41 = await Get9("/api/manifest");
+    var ml41 = mf41["master_list"]!.AsArray();
+    Check(ml41.Count == 1 && ml41[0]!["app_id"]!.GetValue<string>() == "730" &&
+          ml41[0]!["game_id"]!.GetValue<string>() == "Counter-Strike 2" &&
+          ml41[0]!["latest_version"]!.GetValue<string>() == "987654" &&
+          ml41[0]!["launcher"]!.GetValue<string>() == "steam" &&
+          mf41["version"]!.GetValue<int>() == man40["version"]!.GetValue<int>() + 1,
+        "T41c the recorded entry pairs AppID with the resolved game (build id as version) and bumps the manifest version");
+    var dup41 = await Api9("/api/master-add", new MasterAddRequest("730"));
+    Check(dup41.code == 409 && (await Get9("/api/manifest"))["master_list"]!.AsArray().Count == 1,
+        "T41d re-adding a known AppID is rejected with a clear message — the list stays unique");
+    File.WriteAllText(fake41, """
+#!/bin/sh
+printf '"999"\n(\n\t\t"name"\t\t"Counter-Strike 2"\n\t\t"depots"\n\t\t(\n\t\t\t"999"\n\t\t\t(\n\t\t\t\t"buildid"\t\t"444"\n\t\t\t)\n\t\t)\n)\n'
+""");
+    Check((await Api9("/api/master-add", new MasterAddRequest("999"))).code == 409,
+        "T41e a DIFFERENT AppID resolving to an already-listed game name is also rejected — unique entries by identity, not just literal id");
+    Check((await Api9("/api/master-add", new MasterAddRequest("7x"))).code == 400,
+        "T41f a non-numeric AppID is rejected before anything runs (it also never reaches a shell)");
+    File.WriteAllText(fake41, "#!/bin/sh\nprintf 'Redirecting stderr...\\nNo product for app 555\\n'\n");
+    Check((await Api9("/api/master-add", new MasterAddRequest("555"))).code == 502 &&
+          (await Get9("/api/manifest"))["master_list"]!.AsArray().Count == 1,
+        "T41g an unresolvable AppID returns 502 with the steamcmd reason — never a guessed master entry");
+    Environment.SetEnvironmentVariable("ESU_FAKE_STEAMCMD", null);
+    File.Delete(fake41);
+    Check(dash10.IndexOf("id=\"ma-box\"") > dash10.IndexOf("id=\"fleet\"") &&
+          dash10.Contains("addGameByApp(") && dash10.Contains("/api/master-add") &&
+          dash10.Contains("duplicates are rejected") && dash10.Contains("id=\"ma-list\""),
+        "T41h the add-by-AppID box sits UNDER the fleet view, posts to master-add, and lists the recorded entries");
+
     await app9.StopAsync();
 }
 

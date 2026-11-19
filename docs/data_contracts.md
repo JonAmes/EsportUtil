@@ -223,3 +223,22 @@ already executes — no new agent verbs:
 Dashboard: a per-row `deploy` button (visible once any baseline exists) opens a modal showing the
 exact install/uninstall diff before anything runs; destructive removals additionally require an
 explicit confirm listing every app that will be uninstalled.
+
+## 🎮 11. Master List by Steam AppID (§master-add — T41)
+
+`POST /api/master-add {app_id}` — the box under Device Fleet. The server runs
+`steamcmd +login anonymous +app_info_print <appid> +quit` (located via `steamcmd_path`
+config, `STEAMCMD` env, `~/steamcmd`, `PATH`) and parses the VDF server-side for the
+game name and the main depot's `buildid` (depot key == AppID). The user's
+`awk '/BuildID/{print$8}'` slot is unreliable — the raw VDF carries lowercase quoted
+`"buildid"` once per depot — so parsing happens in `SteamInfo.Parse`.
+Uniqueness is enforced BEFORE anything runs: a known AppID (or a different AppID whose
+resolved name is already listed, compared case-insensitively) returns 409. Non-numeric
+ids return 400 (the id never reaches a shell — a `^\d{1,10}$` gate guards the process
+seam too). Unresolvable AppID → 502 with the reason; steamcmd absent → 503.
+On success the entry is recorded as a `MasterGame` with `app_id` + `game_id` = resolved
+name + `latest_version` = depot BuildID + `launcher: "steam"`, and the manifest version
+bumps — so agents see the recorded game immediately (the updates manager owns actual
+game versions from here on). The dashboard box re-renders the recorded list each poll;
+the manifest modal shows the AppID per game. Test seam: `ESU_FAKE_STEAMCMD` (a shell
+command substituted for steamcmd — set only by tests).

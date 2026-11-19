@@ -218,6 +218,38 @@ public static class ServerRole
         // T40: the header "manifest" chip was inert text — this backs the browse modal.
         app.MapGet("/api/manifest", () => Results.Json(manifests.LoadMaster(), Wire.Options));
 
+        // T41: add a game to the master list by Steam AppID. The server runs steamcmd
+        // (+login anonymous +app_info_print <appid> +quit), parses the game NAME and the main
+        // depot BUILDID out of the VDF, and records AppID + name + build. Unique entries only:
+        // a second add of a known AppID (or a name already listed) is rejected, never duplicated.
+        app.MapPost("/api/master-add", async (MasterAddRequest req) =>
+        {
+            var appId = (req.AppId ?? "").Trim();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(appId, @"^\d{1,10}$"))
+                return Results.Json(new AckEnvelope(false, "app_id must be digits only"), Wire.Options, statusCode: 400);
+            var m = manifests.LoadMaster();
+            var dup = m.MasterList.FirstOrDefault(g =>
+                string.Equals(g.AppId, appId, StringComparison.Ordinal) ||
+                string.Equals(g.GameId, appId, StringComparison.OrdinalIgnoreCase));
+            if (dup is not null)
+                return Results.Json(new AckEnvelope(false, $"AppID {appId} is already in the master list as \"{dup.GameId}\""), Wire.Options, statusCode: 409);
+            var steam = SteamInfo.Locate(cfg);
+            if (steam is null)
+                return Results.Json(new AckEnvelope(false, "steamcmd is not installed on the server host — set steamcmd_path in the server config"), Wire.Options, statusCode: 503);
+            var (resolved, err) = await SteamInfo.ResolveAsync(appId, steam);
+            if (resolved is null)
+                return Results.Json(new AckEnvelope(false, err), Wire.Options, statusCode: 502);
+            if (m.MasterList.Any(g => g.GameId.Equals(resolved.Name, StringComparison.OrdinalIgnoreCase)))
+                return Results.Json(new AckEnvelope(false, $"\"{resolved.Name}\" is already in the master list (AppID {resolved.AppId})"), Wire.Options, statusCode: 409);
+            m.MasterList.Add(new MasterGame(resolved.Name, resolved.BuildId, Launcher: "steam", AppId: appId));
+            manifests.SaveMaster(m with { Version = m.Version + 1 });
+            return Results.Json(new
+            {
+                ok = true, app_id = appId, game = resolved.Name, build_id = resolved.BuildId,
+                manifest_version = m.Version + 1,
+            }, Wire.Options);
+        });
+
         // T36: operator pulls an enrolled machine's factory state — its saved name plus every
         // installed app NAME from the last full report. Versions are deliberately NOT captured:
         // keeping apps current is the updates manager's job. Re-pull replaces the entry.

@@ -125,6 +125,10 @@ public sealed record OperatorPasswordRequest(string Username, string Password);
 public sealed record IssueActionRequest(string ClientId);
 public sealed record FactoryDeployRequest(string? SourceClientId = null);   // T39: null = target's own baseline
 
+// ---- T41: master-list add by Steam AppID (steamcmd resolves name + depot BuildID) ----
+
+public sealed record MasterAddRequest(string AppId);
+
 public static class Wire
 {
     public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
